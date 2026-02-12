@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>FreshGuard Admin - Binding</title>
+    <link rel="stylesheet" href="/admin/assets/styles.css" />
+  </head>
+  <body class="dashboard-page">
+    <header class="topbar">
+      <h1>FreshGuard Admin</h1>
+      <nav class="topnav">
+        <a href="/admin/dashboard">Dashboard</a>
+        <a class="active" href="/admin/binding">Binding</a>
+        <a href="/admin/products">Products</a>
+        <a href="/admin/report">Report</a>
+      </nav>
+      <button id="logout-btn" type="button">Log Out</button>
+    </header>
+
+    <main class="dashboard-grid">
+      <section class="panel">
+        <h2>Create Brand</h2>
+        <form id="brand-form" class="stack">
+          <input id="brand-name" placeholder="Brand name" required />
+          <button type="submit">Create Brand</button>
+        </form>
+      </section>
+
+      <section class="panel">
+        <h2>Create Store</h2>
+        <form id="store-form" class="stack">
+          <select id="store-brand" required></select>
+          <input id="store-name" placeholder="Store name" required />
+          <button type="submit">Create Store</button>
+        </form>
+      </section>
+
+      <section class="panel">
+        <h2>Generate Binding Code</h2>
+        <form id="binding-form" class="stack">
+          <select id="binding-store" required></select>
+          <input id="binding-hours" type="number" min="1" value="24" required />
+          <button type="submit">Generate Code</button>
+        </form>
+        <p class="hint">One-time code for store device activation (no staff login).</p>
+      </section>
+
+      <section class="panel wide">
+        <h2>Binding Codes</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Code</th>
+              <th>Brand</th>
+              <th>Store</th>
+              <th>Expires</th>
+              <th>Used At</th>
+              <th>Device</th>
+            </tr>
+          </thead>
+          <tbody id="binding-table"></tbody>
+        </table>
+      </section>
+    </main>
+
+    <p id="page-message" class="page-message"></p>
+
+    <script src="/admin/assets/common.js"></script>
+    <script src="/admin/assets/binding.js"></script>
+  </body>
+</html>

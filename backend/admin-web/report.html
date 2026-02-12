@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>FreshGuard Admin - Expired Report</title>
+    <link rel="stylesheet" href="/admin/assets/styles.css" />
+  </head>
+  <body class="dashboard-page">
+    <header class="topbar">
+      <h1>FreshGuard Admin</h1>
+      <nav class="topnav">
+        <a href="/admin/dashboard">Dashboard</a>
+        <a href="/admin/binding">Binding</a>
+        <a href="/admin/products">Products</a>
+        <a class="active" href="/admin/report">Report</a>
+      </nav>
+      <button id="logout-btn" type="button">Log Out</button>
+    </header>
+
+    <main class="dashboard-grid">
+      <section class="panel wide">
+        <h2>Store/Product Expired Counts</h2>
+        <p class="hint">Counts are grouped by store and product with handled vs unhandled expired items.</p>
+        <button id="refresh-report" type="button">Refresh</button>
+        <table>
+          <thead>
+            <tr>
+              <th>Store</th>
+              <th>Product</th>
+              <th>Expired Total</th>
+              <th>Handled</th>
+              <th>Unhandled</th>
+            </tr>
+          </thead>
+          <tbody id="report-table"></tbody>
+        </table>
+      </section>
+    </main>
+
+    <p id="page-message" class="page-message"></p>
+
+    <script src="/admin/assets/common.js"></script>
+    <script src="/admin/assets/report.js"></script>
+  </body>
+</html>

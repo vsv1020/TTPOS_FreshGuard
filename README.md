@@ -1,24 +1,13 @@
-# TTPOS FreshGuard MVP Scaffold
+# TTPOS FreshGuard Core Business Features
 
-This scaffold includes three slices:
+This repo now includes:
 
-- `backend/`: Node.js + Express API with SQLite admin `users` table and JWT auth.
-- `backend/admin-web/`: Admin web login + dashboard protected by JWT cookie.
-- `android/`: Android admin app scaffold with login flow calling backend auth API.
+- `backend/`: Express + SQLite backend with multi-tenant business model (`brand -> store`), admin JWT auth, store binding-code activation, label printing batches, reminders, handling logs, and reporting.
+- `backend/admin-web/`: Admin web with pages for binding management, product/printer configuration, and expired handling report.
+- `flutter_app/`: Minimal Flutter store app scaffold (bind by code, list products, print labels, view reminders, mark handled).
+- `android/`: Original native Android scaffold retained for reference.
 
-## Backend MVP Features
-
-- Admin user table creation on startup (`users` table with email/password hash/role).
-- Seed admin account from environment variables.
-- Email/password login endpoint returning JWT and setting `admin_token` cookie.
-- Protected admin APIs via JWT:
-  - `GET /api/admin/me`
-  - `GET /api/admin/users`
-- Protected admin web routes:
-  - `GET /admin/login` is public.
-  - `GET /admin` and `GET /admin/dashboard` require valid admin JWT.
-
-## Quick Start (Backend + Admin Web)
+## Backend Setup
 
 1. Install dependencies:
 
@@ -33,55 +22,142 @@ npm install
 cp .env.example .env
 ```
 
-3. Start server:
+3. Start backend:
 
 ```bash
 npm run dev
 ```
 
-4. Open admin login:
+4. Access admin web:
 
-- `http://localhost:4000/admin/login`
-- Sign in using `ADMIN_EMAIL` / `ADMIN_PASSWORD` from `.env`
+- Login: `http://localhost:4000/admin/login`
+- Dashboard: `http://localhost:4000/admin/dashboard`
+- Binding: `http://localhost:4000/admin/binding`
+- Products: `http://localhost:4000/admin/products`
+- Report: `http://localhost:4000/admin/report`
 
-## API Endpoints
+Use `ADMIN_EMAIL` / `ADMIN_PASSWORD` from `.env`.
+
+## Data Model (SQLite)
+
+Backend creates these tables on startup:
+
+- `users`
+- `brands`
+- `stores` (includes printer settings)
+- `binding_codes`
+- `products`
+- `batches`
+- `reminders`
+- `handling_logs`
+
+## REST APIs
+
+### Auth (Admin)
 
 - `POST /api/auth/login`
-  - Body: `{ "email": "...", "password": "..." }`
-  - Returns: `{ token, user }`
 - `POST /api/auth/logout`
-  - Clears auth cookie
-- `GET /api/admin/me` (JWT required)
-- `GET /api/admin/users` (JWT required)
 
-JWT can be sent via:
+### Admin APIs (JWT required)
 
-- `Authorization: Bearer <token>`
-- `admin_token` HTTP cookie
+- `GET /api/admin/me`
+- `GET /api/admin/users`
+- `GET /api/admin/brands`
+- `POST /api/admin/brands`
+- `GET /api/admin/stores`
+- `POST /api/admin/stores`
+- `PATCH /api/admin/stores/:storeId/printer-settings`
+- `GET /api/admin/binding-codes`
+- `POST /api/admin/binding-codes`
+- `GET /api/admin/products?brandId=<id>`
+- `POST /api/admin/products`
+- `GET /api/admin/reports/expired-handling`
+
+### Store Device APIs
+
+- `POST /api/store/bind` (public, bind code activation; returns store JWT)
+- `GET /api/store/me` (store JWT)
+- `GET /api/store/products` (store JWT)
+- `POST /api/store/print` (store JWT; generates batch + reminders)
+- `GET /api/store/reminders?status=expired|expiring|all` (store JWT)
+- `POST /api/store/reminders/:reminderId/handle` (store JWT; reason: `discarded|sold|transferred`)
+
+### API usage examples
+
+Admin login:
+
+```bash
+curl -s -X POST http://localhost:4000/api/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"admin@freshguard.local","password":"Admin123!ChangeMe"}'
+```
+
+Create brand (replace `$ADMIN_JWT`):
+
+```bash
+curl -s -X POST http://localhost:4000/api/admin/brands \
+  -H "Authorization: Bearer $ADMIN_JWT" \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"Acme Foods"}'
+```
+
+Bind store device:
+
+```bash
+curl -s -X POST http://localhost:4000/api/store/bind \
+  -H 'Content-Type: application/json' \
+  -d '{"code":"AB12CD34","deviceId":"android-01"}'
+```
+
+Print labels (replace `$STORE_JWT`):
+
+```bash
+curl -s -X POST http://localhost:4000/api/store/print \
+  -H "Authorization: Bearer $STORE_JWT" \
+  -H 'Content-Type: application/json' \
+  -d '{"productId":1,"quantity":10}'
+```
+
+Mark reminder handled:
+
+```bash
+curl -s -X POST http://localhost:4000/api/store/reminders/123/handle \
+  -H "Authorization: Bearer $STORE_JWT" \
+  -H 'Content-Type: application/json' \
+  -d '{"reason":"sold"}'
+```
+
+## Flutter Store App (`flutter_app/`)
+
+This directory contains a minimal Flutter UI with:
+
+- Bind via one-time code
+- Product list
+- Print labels (creates batch/reminders)
+- Reminder list (expired/expiring)
+- Handle reminder with reasons: discarded/sold/transferred
+
+Quick start (on a machine with Flutter SDK installed):
+
+```bash
+cd flutter_app
+flutter create .
+flutter pub get
+flutter run
+```
+
+Default backend URL in the bind screen is `http://10.0.2.2:4000` (Android emulator).
 
 ## Tests
 
-Backend tests are in `backend/test/auth.test.js` and cover:
+Backend tests:
 
-- Unauthorized admin API rejection
-- Successful login + JWT response
-- Admin API access with bearer token
-- Wrong password rejection
-- Admin web redirect to login for unauthenticated requests
+- `backend/test/auth.test.js`
+- `backend/test/business.test.js`
 
-Run tests:
+Run:
 
 ```bash
 cd backend
 npm test
 ```
-
-## Android Scaffold
-
-Android project is under `android/`.
-
-- Main login screen: `LoginActivity`
-- Post-login screen: `DashboardActivity`
-- API client: `ApiClient` (default backend URL `http://10.0.2.2:4000` for emulator)
-
-Open `android/` in Android Studio and sync Gradle to continue feature development.

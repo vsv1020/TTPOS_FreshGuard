@@ -8,7 +8,13 @@
   </head>
   <body class="dashboard-page">
     <header class="topbar">
-      <h1>FreshGuard Admin Dashboard</h1>
+      <h1>FreshGuard Admin</h1>
+      <nav class="topnav">
+        <a class="active" href="/admin/dashboard">Dashboard</a>
+        <a href="/admin/binding">Binding</a>
+        <a href="/admin/products">Products</a>
+        <a href="/admin/report">Report</a>
+      </nav>
       <button id="logout-btn" type="button">Log Out</button>
     </header>
 
@@ -22,8 +28,14 @@
         <h2>Admin Users</h2>
         <pre id="users-json">Loading...</pre>
       </section>
+
+      <section class="panel">
+        <h2>Quick Counts</h2>
+        <div id="stats-box" class="kv-list">Loading...</div>
+      </section>
     </main>
 
+    <script src="/admin/assets/common.js"></script>
     <script src="/admin/assets/dashboard.js"></script>
   </body>
 </html>

@@ -7,14 +7,31 @@ function signAdminToken(user, jwtSecret, expiresIn = '12h') {
     {
       sub: String(user.id),
       email: user.email,
-      role: user.role
+      role: user.role,
+      tokenType: 'admin'
     },
     jwtSecret,
     { expiresIn }
   );
 }
 
-function verifyAdminToken(token, jwtSecret) {
+function signStoreToken(store, jwtSecret, expiresIn = '45d') {
+  return jwt.sign(
+    {
+      sub: `store:${store.id}`,
+      role: 'store',
+      tokenType: 'store',
+      storeId: store.id,
+      brandId: store.brandId,
+      storeName: store.name,
+      brandName: store.brandName
+    },
+    jwtSecret,
+    { expiresIn }
+  );
+}
+
+function verifyToken(token, jwtSecret) {
   return jwt.verify(token, jwtSecret);
 }
 
@@ -37,11 +54,31 @@ function requireAdminApi({ jwtSecret }) {
     }
 
     try {
-      const decoded = verifyAdminToken(token, jwtSecret);
+      const decoded = verifyToken(token, jwtSecret);
       if (decoded.role !== 'admin') {
         return res.status(403).json({ error: 'Forbidden' });
       }
       req.admin = decoded;
+      return next();
+    } catch (_error) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+  };
+}
+
+function requireStoreApi({ jwtSecret }) {
+  return (req, res, next) => {
+    const token = extractToken(req);
+    if (!token) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    try {
+      const decoded = verifyToken(token, jwtSecret);
+      if (decoded.role !== 'store' || !decoded.storeId) {
+        return res.status(403).json({ error: 'Forbidden' });
+      }
+      req.storeAuth = decoded;
       return next();
     } catch (_error) {
       return res.status(401).json({ error: 'Unauthorized' });
@@ -57,7 +94,7 @@ function requireAdminWeb({ jwtSecret }) {
     }
 
     try {
-      const decoded = verifyAdminToken(token, jwtSecret);
+      const decoded = verifyToken(token, jwtSecret);
       if (decoded.role !== 'admin') {
         return res.redirect('/admin/login');
       }
@@ -73,5 +110,7 @@ module.exports = {
   COOKIE_NAME,
   requireAdminApi,
   requireAdminWeb,
-  signAdminToken
+  requireStoreApi,
+  signAdminToken,
+  signStoreToken
 };

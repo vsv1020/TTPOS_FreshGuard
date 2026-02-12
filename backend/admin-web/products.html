@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>FreshGuard Admin - Products</title>
+    <link rel="stylesheet" href="/admin/assets/styles.css" />
+  </head>
+  <body class="dashboard-page">
+    <header class="topbar">
+      <h1>FreshGuard Admin</h1>
+      <nav class="topnav">
+        <a href="/admin/dashboard">Dashboard</a>
+        <a href="/admin/binding">Binding</a>
+        <a class="active" href="/admin/products">Products</a>
+        <a href="/admin/report">Report</a>
+      </nav>
+      <button id="logout-btn" type="button">Log Out</button>
+    </header>
+
+    <main class="dashboard-grid">
+      <section class="panel">
+        <h2>Create Product</h2>
+        <form id="product-form" class="stack">
+          <select id="product-brand" required></select>
+          <input id="product-name" placeholder="Product name" required />
+          <input id="product-sku" placeholder="SKU" />
+          <input id="product-shelf-life" type="number" placeholder="Shelf life days" required />
+          <select id="product-label-language" required>
+            <option value="single">single</option>
+            <option value="bilingual">bilingual</option>
+          </select>
+          <input id="product-primary-language" placeholder="Primary lang (e.g. en)" value="en" required />
+          <input id="product-secondary-language" placeholder="Secondary lang (required for bilingual)" />
+          <button type="submit">Create Product</button>
+        </form>
+      </section>
+
+      <section class="panel">
+        <h2>Store Printer Settings</h2>
+        <form id="printer-form" class="stack">
+          <select id="printer-store" required></select>
+          <input id="printer-name" placeholder="Printer name" />
+          <input id="printer-model" placeholder="Printer model" />
+          <input id="printer-address" placeholder="Printer address (IP/BLE ID)" />
+          <input id="printer-port" type="number" placeholder="Printer port" />
+          <input id="printer-dpi" type="number" placeholder="Printer DPI" />
+          <input id="label-width-mm" type="number" placeholder="Label width (mm)" />
+          <button type="submit">Save Printer Settings</button>
+        </form>
+      </section>
+
+      <section class="panel wide">
+        <h2>Products</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Brand</th>
+              <th>Name</th>
+              <th>SKU</th>
+              <th>Shelf Life Days</th>
+              <th>Label Language</th>
+              <th>Primary</th>
+              <th>Secondary</th>
+            </tr>
+          </thead>
+          <tbody id="products-table"></tbody>
+        </table>
+      </section>
+    </main>
+
+    <p id="page-message" class="page-message"></p>
+
+    <script src="/admin/assets/common.js"></script>
+    <script src="/admin/assets/products.js"></script>
+  </body>
+</html>

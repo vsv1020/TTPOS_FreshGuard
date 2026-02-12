@@ -1,5 +1,5 @@
 :root {
-  font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
   color: #0f172a;
   background: #f1f5f9;
 }
@@ -32,12 +32,18 @@ h1 {
   font-size: 1.5rem;
 }
 
+h2 {
+  margin: 0 0 12px;
+  font-size: 1.15rem;
+}
+
 p {
   margin: 0 0 20px;
   color: #334155;
 }
 
-form {
+form,
+.stack {
   display: grid;
   gap: 10px;
 }
@@ -47,19 +53,21 @@ label {
   margin-top: 4px;
 }
 
-input {
+input,
+select {
   border: 1px solid #cbd5e1;
   border-radius: 8px;
-  padding: 11px;
-  font-size: 1rem;
+  padding: 10px 11px;
+  font-size: 0.96rem;
+  background: #ffffff;
 }
 
 button {
   border: none;
   border-radius: 8px;
-  padding: 12px 14px;
+  padding: 11px 14px;
   font-weight: 700;
-  font-size: 0.95rem;
+  font-size: 0.92rem;
   cursor: pointer;
   background: #0f172a;
   color: #ffffff;
@@ -80,9 +88,10 @@ button:hover {
 }
 
 .topbar {
-  display: flex;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 14px;
   align-items: center;
-  justify-content: space-between;
   padding: 16px 22px;
   background: #0f172a;
   color: #ffffff;
@@ -91,6 +100,27 @@ button:hover {
 .topbar h1 {
   margin: 0;
   font-size: 1.2rem;
+}
+
+.topnav {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.topnav a {
+  color: #cbd5e1;
+  text-decoration: none;
+  padding: 6px 10px;
+  border-radius: 8px;
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.topnav a.active,
+.topnav a:hover {
+  color: #ffffff;
+  background: #334155;
 }
 
 .topbar button {
@@ -111,9 +141,59 @@ button:hover {
   padding: 16px;
 }
 
+.panel.wide {
+  grid-column: 1 / -1;
+}
+
+.kv-list {
+  display: grid;
+  gap: 8px;
+}
+
+.hint {
+  margin-top: 8px;
+  margin-bottom: 0;
+  font-size: 0.88rem;
+}
+
 pre {
   white-space: pre-wrap;
   word-break: break-word;
   margin: 0;
   font-size: 0.9rem;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.92rem;
+}
+
+th,
+td {
+  border-bottom: 1px solid #e2e8f0;
+  text-align: left;
+  padding: 8px;
+  vertical-align: top;
+}
+
+th {
+  color: #334155;
+}
+
+.page-message {
+  margin: 0 18px 18px;
+  font-weight: 600;
+  min-height: 1.25rem;
+}
+
+@media (max-width: 900px) {
+  .topbar {
+    grid-template-columns: 1fr;
+    align-items: start;
+  }
+
+  .topbar button {
+    width: fit-content;
+  }
 }

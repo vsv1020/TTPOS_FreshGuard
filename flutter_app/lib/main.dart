@@ -4,7 +4,10 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'printer/usb_printer.dart';
+
 const _sessionKey = 'freshguard_session';
+const _usbPrinterSettingsKey = 'freshguard_usb_printer_settings';
 
 void main() {
   runApp(const FreshGuardStoreApp());
@@ -207,12 +210,18 @@ class DashboardScreen extends StatefulWidget {
 
 class _DashboardScreenState extends State<DashboardScreen> {
   late final ApiClient _api;
+  final UsbPrinterService _usbPrinterService = const UsbPrinterService();
 
   final _quantityController = TextEditingController(text: '1');
 
   List<ProductItem> _products = [];
   List<ReminderItem> _reminders = [];
+  List<UsbPrinterDevice> _usbDevices = [];
   int? _selectedProductId;
+  PrinterProfile _printerProfile = PrinterProfile.tspl;
+  UsbPrinterDevice? _selectedUsbDevice;
+  UsbPrinterSettings _savedPrinterSettings = const UsbPrinterSettings(profile: PrinterProfile.tspl);
+  String _lastBackendLabelText = '';
   String _reminderStatus = 'expired';
   bool _busy = false;
   String? _message;
@@ -221,7 +230,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
   void initState() {
     super.initState();
     _api = ApiClient(baseUrl: widget.session.baseUrl, token: widget.session.token);
-    _loadAll();
+    _initializeDashboard();
+  }
+
+  Future<void> _initializeDashboard() async {
+    await _loadPrinterSettings();
+    await _refreshUsbDevices(clearMessage: false);
+    await _loadAll();
   }
 
   Future<void> _loadAll() async {
@@ -292,8 +307,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
       setState(() {
         _reminders = reminders;
+        _lastBackendLabelText = result.labelText;
         _message =
-            'Batch ${result.batchId} created. ${result.remindersCreated} reminders generated for expiry tracking.';
+            'Batch ${result.batchId} created. ${result.remindersCreated} reminders generated for expiry tracking. Backend label text loaded for test print.';
       });
     } catch (error) {
       if (!mounted) {
@@ -328,6 +344,172 @@ class _DashboardScreenState extends State<DashboardScreen> {
       setState(() {
         _reminders = reminders;
         _message = 'Reminder ${reminder.id} marked as $reason.';
+      });
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _message = error.toString().replaceFirst('Exception: ', '');
+      });
+    } finally {
+      if (mounted) {
+        setState(() {
+          _busy = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _loadPrinterSettings() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_usbPrinterSettingsKey);
+    if (raw == null || raw.isEmpty) {
+      return;
+    }
+
+    try {
+      final parsed = jsonDecode(raw) as Map<String, dynamic>;
+      final settings = UsbPrinterSettings.fromJson(parsed);
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _printerProfile = settings.profile;
+        _savedPrinterSettings = settings;
+        _selectedUsbDevice = settings.device;
+      });
+    } catch (_) {
+      // Ignore malformed local setting and keep defaults.
+    }
+  }
+
+  Future<void> _savePrinterSettings({bool showStatus = true}) async {
+    final settings = UsbPrinterSettings(
+      profile: _printerProfile,
+      device: _selectedUsbDevice,
+    );
+
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_usbPrinterSettingsKey, jsonEncode(settings.toJson()));
+
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _savedPrinterSettings = settings;
+      if (showStatus) {
+        _message = 'Printer settings saved locally.';
+      }
+    });
+  }
+
+  UsbPrinterDevice? _matchSavedDevice(List<UsbPrinterDevice> devices) {
+    if (_selectedUsbDevice != null) {
+      for (final device in devices) {
+        if (device.persistentKey == _selectedUsbDevice!.persistentKey) {
+          return device;
+        }
+      }
+    }
+
+    final saved = _savedPrinterSettings.device;
+    if (saved == null) {
+      return _selectedUsbDevice;
+    }
+
+    for (final device in devices) {
+      final sameVendorProduct = device.vendorId == saved.vendorId && device.productId == saved.productId;
+      if (sameVendorProduct && device.deviceId == saved.deviceId) {
+        return device;
+      }
+    }
+
+    for (final device in devices) {
+      if (device.vendorId == saved.vendorId && device.productId == saved.productId) {
+        return device;
+      }
+    }
+    return _selectedUsbDevice;
+  }
+
+  Future<void> _refreshUsbDevices({bool clearMessage = true}) async {
+    setState(() {
+      _busy = true;
+      if (clearMessage) {
+        _message = null;
+      }
+    });
+
+    try {
+      final devices = await _usbPrinterService.listDevices();
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _usbDevices = devices;
+        _selectedUsbDevice = _matchSavedDevice(devices);
+      });
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _message = error.toString().replaceFirst('Exception: ', '');
+      });
+    } finally {
+      if (mounted) {
+        setState(() {
+          _busy = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _testPrint() async {
+    if (_selectedUsbDevice == null) {
+      setState(() {
+        _message = 'Select a USB device before test printing.';
+      });
+      return;
+    }
+
+    if (_lastBackendLabelText.trim().isEmpty) {
+      setState(() {
+        _message = 'No backend label text available yet. Use Print (Generate Batch) first.';
+      });
+      return;
+    }
+
+    setState(() {
+      _busy = true;
+      _message = null;
+    });
+
+    try {
+      final granted = await _usbPrinterService.requestPermission(deviceId: _selectedUsbDevice!.deviceId);
+      if (!granted) {
+        throw Exception('USB permission denied for selected printer.');
+      }
+
+      final bytes = LabelCommandBuilder.buildSample(
+        profile: _printerProfile,
+        labelText: _lastBackendLabelText,
+        barcodeData: 'FG${DateTime.now().millisecondsSinceEpoch}',
+      );
+      final written = await _usbPrinterService.write(
+        deviceId: _selectedUsbDevice!.deviceId,
+        bytes: bytes,
+      );
+
+      await _savePrinterSettings(showStatus: false);
+
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _message =
+            'Test print sent using ${_printerProfile.label} to ${_selectedUsbDevice!.subtitle}. Wrote $written bytes.';
       });
     } catch (error) {
       if (!mounted) {
@@ -433,6 +615,104 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 FilledButton(
                   onPressed: _busy ? null : _printBatch,
                   child: const Text('Print (Generate Batch)'),
+                ),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 8),
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text('USB Printer', style: Theme.of(context).textTheme.titleMedium),
+                    ),
+                    IconButton(
+                      tooltip: 'Discover USB devices',
+                      onPressed: _busy ? null : () => _refreshUsbDevices(),
+                      icon: const Icon(Icons.usb),
+                    ),
+                  ],
+                ),
+                Text(
+                  _selectedUsbDevice == null
+                      ? 'Selected: none'
+                      : 'Selected: ${_selectedUsbDevice!.title} (${_selectedUsbDevice!.subtitle})',
+                ),
+                Text(
+                  'Saved profile: ${_savedPrinterSettings.profile.label}',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+                const SizedBox(height: 12),
+                DropdownButtonFormField<PrinterProfile>(
+                  value: _printerProfile,
+                  decoration: const InputDecoration(labelText: 'Printer profile'),
+                  items: PrinterProfile.values
+                      .map(
+                        (profile) => DropdownMenuItem<PrinterProfile>(
+                          value: profile,
+                          child: Text(profile.label),
+                        ),
+                      )
+                      .toList(),
+                  onChanged: _busy
+                      ? null
+                      : (profile) {
+                          if (profile == null) {
+                            return;
+                          }
+                          setState(() {
+                            _printerProfile = profile;
+                          });
+                        },
+                ),
+                const SizedBox(height: 12),
+                if (_usbDevices.isEmpty)
+                  const Text('No USB devices detected. Connect a printer and tap USB refresh.')
+                else
+                  ..._usbDevices.map(
+                    (device) => RadioListTile<String>(
+                      contentPadding: EdgeInsets.zero,
+                      dense: true,
+                      title: Text(device.title),
+                      subtitle: Text('${device.subtitle} | Device ID ${device.deviceId}'),
+                      value: device.persistentKey,
+                      groupValue: _selectedUsbDevice?.persistentKey,
+                      onChanged: _busy
+                          ? null
+                          : (_) {
+                              setState(() {
+                                _selectedUsbDevice = device;
+                              });
+                            },
+                    ),
+                  ),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    FilledButton.tonal(
+                      onPressed: _busy ? null : () => _savePrinterSettings(),
+                      child: const Text('Save Printer Settings'),
+                    ),
+                    FilledButton(
+                      onPressed: _busy ? null : _testPrint,
+                      child: const Text('Test Print'),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  _lastBackendLabelText.trim().isEmpty
+                      ? 'Backend label text: unavailable. Generate a batch first.'
+                      : 'Backend label text loaded and ready for test print.',
+                  style: Theme.of(context).textTheme.bodySmall,
                 ),
               ],
             ),
@@ -620,9 +900,11 @@ class ApiClient {
     );
 
     final batch = result['batch'] as Map<String, dynamic>;
+    final label = result['label'] as Map<String, dynamic>?;
     return PrintResult(
       batchId: (batch['id'] as num).toInt(),
       remindersCreated: (result['remindersCreated'] as num).toInt(),
+      labelText: label?['text']?.toString() ?? '',
     );
   }
 
@@ -732,8 +1014,10 @@ class PrintResult {
   const PrintResult({
     required this.batchId,
     required this.remindersCreated,
+    required this.labelText,
   });
 
   final int batchId;
   final int remindersCreated;
+  final String labelText;
 }

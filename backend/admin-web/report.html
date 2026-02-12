@@ -20,17 +20,17 @@
 
     <main class="dashboard-grid">
       <section class="panel wide">
-        <h2>Store/Product Expired Counts</h2>
-        <p class="hint">Counts are grouped by store and product with handled vs unhandled expired items.</p>
+        <h2>Unhandled Expired by Store -> Product</h2>
+        <p class="hint">Rows are grouped by store and product. Unhandled expired count is the key metric for follow-up.</p>
         <button id="refresh-report" type="button">Refresh</button>
         <table>
           <thead>
             <tr>
               <th>Store</th>
               <th>Product</th>
+              <th>Unhandled Expired</th>
               <th>Expired Total</th>
               <th>Handled</th>
-              <th>Unhandled</th>
             </tr>
           </thead>
           <tbody id="report-table"></tbody>

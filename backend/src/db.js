@@ -139,6 +139,53 @@ function normalizeLabelLanguage(labelLanguage) {
   return value;
 }
 
+function getProductLabelLanguages(product) {
+  const languages = [String(product.primaryLanguage || 'en').trim().toLowerCase()].filter(Boolean);
+  if (product.labelLanguage === LABEL_LANGUAGE_BILINGUAL && product.secondaryLanguage) {
+    languages.push(String(product.secondaryLanguage).trim().toLowerCase());
+  }
+  return languages;
+}
+
+function renderLabelTemplate({
+  template,
+  productName,
+  batchId,
+  printedAt,
+  expiresAt,
+  storeName,
+  languages
+}) {
+  const headerLines = [
+    `Template: ${template}`,
+    `Store: ${storeName}`,
+    `Product: ${productName}`,
+    `Batch ID: ${batchId}`,
+    `Printed At: ${printedAt}`,
+    `Expires At: ${expiresAt}`,
+    `Languages: ${languages.join(', ')}`
+  ];
+
+  if (template === LABEL_LANGUAGE_BILINGUAL) {
+    return `${headerLines.join('\n')}\nPrimary Name [${languages[0]}]: ${productName}\nSecondary Name [${
+      languages[1] || ''
+    }]: ${productName}`;
+  }
+
+  return `${headerLines.join('\n')}\nName [${languages[0] || 'en'}]: ${productName}`;
+}
+
+function getStorePrinterSettings(store) {
+  return {
+    printerName: store.printerName || null,
+    printerModel: store.printerModel || null,
+    printerAddress: store.printerAddress || null,
+    printerPort: store.printerPort ?? null,
+    printerDpi: store.printerDpi ?? null,
+    labelWidthMm: store.labelWidthMm ?? null
+  };
+}
+
 function generateBindingCode() {
   return crypto.randomBytes(4).toString('hex').toUpperCase();
 }
@@ -636,9 +683,26 @@ async function createBatchWithReminders(db, { storeId, productId, quantity, prin
       batchInsert.lastID
     );
 
+    const languages = getProductLabelLanguages(product);
+    const label = {
+      template: product.labelLanguage,
+      productName: product.name,
+      batchId: batch.id,
+      printedAt: batch.printedAt,
+      expiresAt: batch.expiresAt,
+      storeName: store.name,
+      languages
+    };
+
     return {
       batch,
-      remindersCreated: normalizedQuantity
+      remindersCreated: normalizedQuantity,
+      store,
+      printerSettings: getStorePrinterSettings(store),
+      label: {
+        ...label,
+        text: renderLabelTemplate(label)
+      }
     };
   } catch (error) {
     await db.exec('ROLLBACK');
@@ -654,7 +718,7 @@ function normalizeReminderStatus(status) {
   return normalized;
 }
 
-async function listStoreReminders(db, { storeId, status = 'expiring', thresholdDays = 2 }) {
+async function listStoreReminders(db, { storeId, status = 'expiring', thresholdDays = 1 }) {
   const normalizedStoreId = requirePositiveInteger(storeId, 'storeId');
   const normalizedStatus = normalizeReminderStatus(status);
   const normalizedThresholdDays = Number(thresholdDays);

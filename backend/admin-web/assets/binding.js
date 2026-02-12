@@ -18,6 +18,16 @@ function renderStoreSelect() {
     .join('');
 }
 
+function getBindingStatus(row) {
+  if (row.usedAt) {
+    return 'used';
+  }
+  if (row.expiresAt && new Date(row.expiresAt).getTime() < Date.now()) {
+    return 'expired';
+  }
+  return 'active';
+}
+
 function renderBindingTable(codes) {
   bindingTable.innerHTML = codes
     .map(
@@ -26,6 +36,7 @@ function renderBindingTable(codes) {
       <td>${row.brandName}</td>
       <td>${row.storeName}</td>
       <td>${row.expiresAt || '-'}</td>
+      <td>${getBindingStatus(row)}</td>
       <td>${row.usedAt || '-'}</td>
       <td>${row.boundDeviceId || '-'}</td>
     </tr>`

@@ -2,14 +2,18 @@ const tableBody = document.getElementById('report-table');
 const refreshButton = document.getElementById('refresh-report');
 
 function renderRows(rows) {
-  tableBody.innerHTML = rows
+  const sortedRows = [...rows].sort(
+    (a, b) => Number(b.expiredUnhandledCount) - Number(a.expiredUnhandledCount)
+  );
+
+  tableBody.innerHTML = sortedRows
     .map(
       (row) => `<tr>
       <td>${row.storeName}</td>
       <td>${row.productName}</td>
+      <td>${row.expiredUnhandledCount}</td>
       <td>${row.expiredTotalCount}</td>
       <td>${row.expiredHandledCount}</td>
-      <td>${row.expiredUnhandledCount}</td>
     </tr>`
     )
     .join('');

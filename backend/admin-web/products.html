@@ -30,8 +30,9 @@
             <option value="single">single</option>
             <option value="bilingual">bilingual</option>
           </select>
-          <input id="product-primary-language" placeholder="Primary lang (e.g. en)" value="en" required />
-          <input id="product-secondary-language" placeholder="Secondary lang (required for bilingual)" />
+          <select id="product-primary-language" required></select>
+          <select id="product-secondary-language"></select>
+          <p class="hint">Bilingual labels require a secondary language.</p>
           <button type="submit">Create Product</button>
         </form>
       </section>
@@ -48,6 +49,7 @@
           <input id="label-width-mm" type="number" placeholder="Label width (mm)" />
           <button type="submit">Save Printer Settings</button>
         </form>
+        <p id="printer-selected-hint" class="hint"></p>
       </section>
 
       <section class="panel wide">

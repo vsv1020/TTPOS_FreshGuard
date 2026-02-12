@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>FreshGuard Admin Dashboard</title>
+    <link rel="stylesheet" href="/admin/assets/styles.css" />
+  </head>
+  <body class="dashboard-page">
+    <header class="topbar">
+      <h1>FreshGuard Admin Dashboard</h1>
+      <button id="logout-btn" type="button">Log Out</button>
+    </header>
+
+    <main class="dashboard-grid">
+      <section class="panel">
+        <h2>Current Session</h2>
+        <pre id="session-json">Loading...</pre>
+      </section>
+
+      <section class="panel">
+        <h2>Admin Users</h2>
+        <pre id="users-json">Loading...</pre>
+      </section>
+    </main>
+
+    <script src="/admin/assets/dashboard.js"></script>
+  </body>
+</html>

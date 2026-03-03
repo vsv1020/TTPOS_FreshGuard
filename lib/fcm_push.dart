@@ -1,4 +1,5 @@
 import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:flutter/foundation.dart';
 
 class FCMService {
   static final FirebaseMessaging _instance = FirebaseMessaging.instance;
@@ -7,7 +8,7 @@ class FCMService {
   static Future<void> init() async {
     await _instance.requestPermission();
     final token = await _instance.getToken();
-    print('FCM Token: $token');
+    debugPrint('FCM Token: $token');
   }
   
   /// 推送消息到设备

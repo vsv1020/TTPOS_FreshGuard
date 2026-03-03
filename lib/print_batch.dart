@@ -3,7 +3,7 @@ import 'dart:convert';
 
 class PrintService {
   static const String _apiBase = 'https://api.ttpos.com';
-  
+ 
   /// 批量打印订单
   static Future<bool> batchPrint(List<String> orderIds) async {
     final response = await http.post(

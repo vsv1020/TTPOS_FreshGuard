@@ -11,6 +11,8 @@ const {
   signAdminToken,
   signStoreToken
 } = require('./auth');
+const { initInspectionSchema } = require('./inspection-db');
+const { buildInspectionRoutes } = require('./inspection-routes');
 const {
   consumeBindingCode,
   createBatchWithReminders,
@@ -63,6 +65,11 @@ function buildApp({ db, jwtSecret, adminWebDir }) {
   app.use(cors({ origin: true, credentials: true }));
   app.use(express.json());
   app.use(cookieParser());
+
+  // Inspection module
+  initInspectionSchema(db).catch(e => console.error("Inspection schema init failed:", e));
+  const inspectionRouter = buildInspectionRoutes({ db, adminAuth: adminApiAuth, storeAuth: storeApiAuth });
+  app.use("/api", inspectionRouter);
 
   app.get('/health', (_req, res) => {
     res.json({ ok: true });

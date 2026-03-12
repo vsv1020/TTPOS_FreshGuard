@@ -308,6 +308,14 @@ function buildApp({ db, jwtSecret, adminWebDir }) {
 
   app.use('/admin/assets', express.static(path.join(webRoot, 'assets')));
 
+  // Vue3 Frontend (built to backend/public/)
+  const vue3Dir = path.join(__dirname, '..', 'public');
+  app.use('/app', express.static(vue3Dir));
+  // SPA fallback for Vue3 hash router
+  app.get('/app/*', (req, res) => {
+    res.sendFile(path.join(vue3Dir, 'index.html'));
+  });
+
   app.get('/admin/login', (_req, res) => {
     res.sendFile(path.join(webRoot, 'login.html'));
   });

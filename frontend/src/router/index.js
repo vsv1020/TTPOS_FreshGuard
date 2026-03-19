@@ -20,6 +20,8 @@ const routes = [
       { path: '', redirect: '/store/inspect' },
       { path: 'inspect', component: () => import('../views/store/Inspect.vue') },
       { path: 'inspect/:id', component: () => import('../views/store/InspectForm.vue') },
+      { path: 'self-check', component: () => import('../views/store/SelfCheck.vue') },
+      { path: 'scorecard/:id', component: () => import('../views/store/Scorecard.vue') },
       { path: 'history', component: () => import('../views/store/History.vue') },
     ]
   },

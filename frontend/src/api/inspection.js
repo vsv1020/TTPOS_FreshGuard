@@ -32,3 +32,11 @@ export const getStoreHistory = (params) => http.get('/store/inspection/history',
 
 // Auth
 export const login = (data) => http.post('/auth/login', data)
+
+// Store — Self-Check
+export const startSelfCheck = (data) => http.post('/store/inspection/self-check/start', data)
+export const submitSelfCheck = (id, data) => http.post(`/store/inspection/self-check/${id}/submit`, data)
+
+// Scorecard
+export const getScorecard = (id) => http.get(`/store/inspection/${id}/scorecard`)
+export const getScoreHistory = (params) => http.get('/store/inspection/scores/history', { params })

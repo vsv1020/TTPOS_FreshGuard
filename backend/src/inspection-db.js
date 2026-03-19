@@ -281,25 +281,109 @@ async function listIssues(db, { storeId, status, severity, limit = 50 } = {}) {
   return db.all(sql, params);
 }
 
+
+
+// ─── Week 2: Self-Check Module ───────────────────────────
+
+async function createSelfCheck(db, { storeId, templateId, submittedBy }) {
+  if (!storeId || !templateId) throw new Error('storeId and templateId required');
+  const id = `sc_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  await db.run(
+    `INSERT INTO inspections (id, template_id, store_id, inspector_id, type, status, created_at)
+     VALUES (?, ?, ?, ?, 'self_check', 'in_progress', datetime('now'))`,
+    [id, templateId, storeId, submittedBy || 'store']
+  );
+  return { id, templateId, storeId, type: 'self_check', status: 'in_progress' };
+}
+
+async function submitSelfCheckResults(db, { inspectionId, results, photos }) {
+  const insp = await db.get('SELECT * FROM inspections WHERE id = ?', [inspectionId]);
+  if (!insp) throw new Error('Inspection not found');
+  if (insp.status === 'completed') throw new Error('Already submitted');
+
+  let totalScore = 0;
+  let maxScore = 0;
+
+  for (const r of results) {
+    await db.run(
+      `INSERT OR REPLACE INTO inspection_results (id, inspection_id, check_item_id, score, note, photo_url)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [`r_${inspectionId}_${r.checkItemId}`, inspectionId, r.checkItemId, r.score || 0, r.note || '', r.photoUrl || '']
+    );
+    totalScore += (r.score || 0);
+    const item = await db.get('SELECT max_score FROM check_items WHERE id = ?', [r.checkItemId]);
+    if (item) maxScore += item.max_score;
+  }
+
+  // Calculate grade
+  const pct = maxScore > 0 ? (totalScore / maxScore) * 100 : 0;
+  const grade = pct >= 90 ? 'A' : pct >= 80 ? 'B' : pct >= 70 ? 'C' : pct >= 60 ? 'D' : 'F';
+
+  await db.run(
+    `UPDATE inspections SET status = 'completed', total_score = ?, max_score = ?, grade = ?,
+     score_pct = ?, completed_at = datetime('now') WHERE id = ?`,
+    [totalScore, maxScore, grade, Math.round(pct * 10) / 10, inspectionId]
+  );
+
+  return { inspectionId, totalScore, maxScore, pct: Math.round(pct * 10) / 10, grade };
+}
+
+// ─── Week 2: Scoring & Grading ───────────────────────────
+
+async function getInspectionScorecard(db, inspectionId) {
+  const insp = await db.get(
+    `SELECT i.*, t.name as template_name, t.category
+     FROM inspections i
+     LEFT JOIN inspection_templates t ON t.id = i.template_id
+     WHERE i.id = ?`,
+    [inspectionId]
+  );
+  if (!insp) throw new Error('Inspection not found');
+
+  const results = await db.all(
+    `SELECT r.*, ci.name as item_name, ci.description as item_desc, ci.max_score, ci.sort_order
+     FROM inspection_results r
+     LEFT JOIN check_items ci ON ci.id = r.check_item_id
+     WHERE r.inspection_id = ?
+     ORDER BY ci.sort_order`,
+    [inspectionId]
+  );
+
+  const pct = insp.max_score > 0 ? (insp.total_score / insp.max_score) * 100 : 0;
+  const grade = pct >= 90 ? 'A' : pct >= 80 ? 'B' : pct >= 70 ? 'C' : pct >= 60 ? 'D' : 'F';
+
+  return {
+    ...insp,
+    grade,
+    pct: Math.round(pct * 10) / 10,
+    results,
+    summary: {
+      total: results.length,
+      passed: results.filter(r => r.score >= (r.max_score * 0.6)).length,
+      failed: results.filter(r => r.score < (r.max_score * 0.6)).length,
+      critical: results.filter(r => r.score === 0 && r.max_score > 0).length,
+    }
+  };
+}
+
+async function getStoreScoreHistory(db, storeId, limit = 10) {
+  return db.all(
+    `SELECT i.id, i.template_id, t.name as template_name, i.total_score, i.max_score,
+            i.grade, i.score_pct, i.type, i.completed_at
+     FROM inspections i
+     LEFT JOIN inspection_templates t ON t.id = i.template_id
+     WHERE i.store_id = ? AND i.status = 'completed'
+     ORDER BY i.completed_at DESC LIMIT ?`,
+    [storeId, limit]
+  );
+}
+
 module.exports = {
   initInspectionSchema,
-  // Templates
-  createTemplate,
-  listTemplates,
-  getTemplate,
-  updateTemplate,
-  deleteTemplate,
-  // Check Items
-  addCheckItem,
-  updateCheckItem,
-  deleteCheckItem,
-  // Inspections
-  createInspection,
-  submitInspectionResults,
-  listInspections,
-  getInspection,
-  // Issues
-  createIssue,
-  updateIssue,
-  listIssues,
+  createTemplate, listTemplates, getTemplate, updateTemplate, deleteTemplate,
+  addCheckItem, updateCheckItem, deleteCheckItem,
+  createInspection, submitInspectionResults, listInspections, getInspection,
+  createIssue, updateIssue, listIssues,
+  createSelfCheck, submitSelfCheckResults,
+  getInspectionScorecard, getStoreScoreHistory,
 };

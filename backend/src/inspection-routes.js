@@ -9,6 +9,8 @@ const {
   addCheckItem, updateCheckItem, deleteCheckItem,
   createInspection, submitInspectionResults, listInspections, getInspection,
   createIssue, updateIssue, listIssues,
+  createSelfCheck, submitSelfCheckResults,
+  getInspectionScorecard, getStoreScoreHistory,
 } = require('./inspection-db');
 
 function respondError(res, error) {
@@ -202,6 +204,54 @@ function buildInspectionRoutes({ db, adminAuth, storeAuth }) {
         limit: parseInt(req.query.limit) || 20,
       });
       res.json({ inspections });
+    } catch (e) { respondError(res, e); }
+  });
+
+
+  // ─── Store: Self-Check ──────────────────────────────────
+
+  router.post('/store/inspection/self-check/start', storeAuth, async (req, res) => {
+    try {
+      const result = await createSelfCheck(db, {
+        storeId: req.body?.storeId || req.storeId,
+        templateId: req.body?.templateId,
+        submittedBy: req.body?.submittedBy || 'store',
+      });
+      res.status(201).json(result);
+    } catch (e) { respondError(res, e); }
+  });
+
+  router.post('/store/inspection/self-check/:id/submit', storeAuth, async (req, res) => {
+    try {
+      const result = await submitSelfCheckResults(db, {
+        inspectionId: req.params.id,
+        results: req.body?.results || [],
+        photos: req.body?.photos || [],
+      });
+      res.json(result);
+    } catch (e) { respondError(res, e); }
+  });
+
+  // ─── Scorecard & Grading ────────────────────────────────
+
+  router.get('/admin/inspection/:id/scorecard', adminAuth, async (req, res) => {
+    try {
+      const scorecard = await getInspectionScorecard(db, req.params.id);
+      res.json(scorecard);
+    } catch (e) { respondError(res, e); }
+  });
+
+  router.get('/store/inspection/:id/scorecard', storeAuth, async (req, res) => {
+    try {
+      const scorecard = await getInspectionScorecard(db, req.params.id);
+      res.json(scorecard);
+    } catch (e) { respondError(res, e); }
+  });
+
+  router.get('/store/inspection/scores/history', storeAuth, async (req, res) => {
+    try {
+      const history = await getStoreScoreHistory(db, req.query.storeId || req.storeId, parseInt(req.query.limit) || 10);
+      res.json({ history });
     } catch (e) { respondError(res, e); }
   });
 

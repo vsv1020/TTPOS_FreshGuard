@@ -42,6 +42,160 @@ void main() {
     expect(parsePrinterProfile(null), PrinterProfile.tspl);
   });
 
+  // ── buildLabel tests ──────────────────────────────────────────────────────
+
+  test('buildLabel TSPL contains product name, EXP date, barcode', () {
+    final data = LabelData(
+      productName: 'Organic Salad',
+      storeName: 'FreshGuard HQ',
+      printedAt: '2024-03-15T09:00:00Z',
+      expiresAt: '2024-03-18T09:00:00Z',
+      barcodeData: 'FG-1-1-5',
+      allergens: 'Nuts',
+      storageConditions: '2-4°C',
+      opened: false,
+    );
+
+    final command = utf8.decode(
+      LabelCommandBuilder.buildLabel(profile: PrinterProfile.tspl, data: data),
+    );
+
+    expect(command, contains('SIZE 60 mm,40 mm'));
+    expect(command, contains('Organic Salad'));
+    expect(command, contains('EXP:  2024-03-18'));
+    expect(command, contains('ALLERGEN: Nuts'));
+    expect(command, contains('STORE: 2-4°C'));
+    // barcodeData sanitized: FG115
+    expect(command, contains('"FG115"'));
+    // human-readable original below barcode
+    expect(command, contains('FG-1-1-5'));
+    expect(command, isNot(contains('OPENED')));
+  });
+
+  test('buildLabel TSPL opened=true shows OPENED banner', () {
+    final data = LabelData(
+      productName: 'Soup',
+      storeName: 'Store A',
+      printedAt: '2024-03-15T00:00:00Z',
+      expiresAt: '2024-03-16T00:00:00Z',
+      barcodeData: 'FG-2-3-7',
+      opened: true,
+    );
+
+    final command = utf8.decode(
+      LabelCommandBuilder.buildLabel(profile: PrinterProfile.tspl, data: data),
+    );
+
+    expect(command, contains('OPENED'));
+    expect(command, contains('已开封'));
+  });
+
+  test('buildLabel TSPL no allergens/storage when fields are null', () {
+    final data = LabelData(
+      productName: 'Plain Bread',
+      storeName: 'Store B',
+      printedAt: '2024-03-15T00:00:00Z',
+      expiresAt: '2024-03-20T00:00:00Z',
+      barcodeData: 'FG-3-1-2',
+    );
+
+    final command = utf8.decode(
+      LabelCommandBuilder.buildLabel(profile: PrinterProfile.tspl, data: data),
+    );
+
+    expect(command, isNot(contains('ALLERGEN')));
+    expect(command, isNot(contains('STORE:')));
+  });
+
+  test('buildLabel CPCL contains product name, EXP date, barcode', () {
+    final data = LabelData(
+      productName: 'Fresh Milk',
+      storeName: 'Cold Storage',
+      printedAt: '2024-04-01T08:00:00Z',
+      expiresAt: '2024-04-05T08:00:00Z',
+      barcodeData: 'FG-4-2-9',
+      allergens: 'Dairy',
+      storageConditions: '0-4°C',
+      opened: false,
+    );
+
+    final command = utf8.decode(
+      LabelCommandBuilder.buildLabel(profile: PrinterProfile.cpcl, data: data),
+    );
+
+    expect(command, contains('! 0 200 200'));
+    expect(command, contains('Fresh Milk'));
+    expect(command, contains('EXP:  2024-04-05'));
+    expect(command, contains('ALLERGEN: Dairy'));
+    expect(command, contains('STORE: 0-4°C'));
+    expect(command, contains('"FG429"'));
+    expect(command, contains('FG-4-2-9'));
+    expect(command, isNot(contains('OPENED')));
+  });
+
+  test('buildLabel CPCL opened=true shows OPENED banner', () {
+    final data = LabelData(
+      productName: 'Juice',
+      storeName: 'Store C',
+      printedAt: '2024-04-01T00:00:00Z',
+      expiresAt: '2024-04-02T00:00:00Z',
+      barcodeData: 'FG-5-1-1',
+      opened: true,
+    );
+
+    final command = utf8.decode(
+      LabelCommandBuilder.buildLabel(profile: PrinterProfile.cpcl, data: data),
+    );
+
+    expect(command, contains('OPENED'));
+    expect(command, contains('已开封'));
+  });
+
+  test('LabelData.fromBackend parses all fields correctly', () {
+    final map = <String, dynamic>{
+      'productName': 'Test Product',
+      'storeName': 'Test Store',
+      'printedAt': '2024-05-01T10:00:00Z',
+      'expiresAt': '2024-05-08T10:00:00Z',
+      'barcodeData': 'FG-1-2-3',
+      'languages': ['en', 'zh'],
+      'allergens': 'Gluten',
+      'storageConditions': 'Room temp',
+      'opened': true,
+    };
+
+    final label = LabelData.fromBackend(map);
+
+    expect(label.productName, 'Test Product');
+    expect(label.storeName, 'Test Store');
+    expect(label.printedAt, '2024-05-01T10:00:00Z');
+    expect(label.expiresAt, '2024-05-08T10:00:00Z');
+    expect(label.barcodeData, 'FG-1-2-3');
+    expect(label.languages, ['en', 'zh']);
+    expect(label.allergens, 'Gluten');
+    expect(label.storageConditions, 'Room temp');
+    expect(label.opened, isTrue);
+  });
+
+  test('LabelData.fromBackend handles missing optional fields', () {
+    final map = <String, dynamic>{
+      'productName': 'Minimal',
+      'storeName': 'Store',
+      'printedAt': '2024-06-01T00:00:00Z',
+      'expiresAt': '2024-06-07T00:00:00Z',
+      'barcodeData': 'FG-0-0-1',
+    };
+
+    final label = LabelData.fromBackend(map);
+
+    expect(label.allergens, isNull);
+    expect(label.storageConditions, isNull);
+    expect(label.languages, isNull);
+    expect(label.opened, isFalse);
+  });
+
+  // ── Existing serialization test ───────────────────────────────────────────
+
   test('USB device key and settings serialization are stable', () {
     const device = UsbPrinterDevice(
       deviceId: 3,

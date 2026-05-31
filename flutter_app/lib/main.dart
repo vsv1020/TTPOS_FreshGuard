@@ -222,6 +222,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   UsbPrinterDevice? _selectedUsbDevice;
   UsbPrinterSettings _savedPrinterSettings = const UsbPrinterSettings(profile: PrinterProfile.tspl);
   String _lastBackendLabelText = '';
+  LabelData? _lastBackendLabel;
   String _reminderStatus = 'expired';
   bool _busy = false;
   String? _message;
@@ -308,6 +309,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       setState(() {
         _reminders = reminders;
         _lastBackendLabelText = result.labelText;
+        _lastBackendLabel = result.labelData;
         _message =
             'Batch ${result.batchId} created. ${result.remindersCreated} reminders generated for expiry tracking. Backend label text loaded for test print.';
       });
@@ -492,11 +494,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
         throw Exception('USB permission denied for selected printer.');
       }
 
-      final bytes = LabelCommandBuilder.buildSample(
-        profile: _printerProfile,
-        labelText: _lastBackendLabelText,
-        barcodeData: 'FG${DateTime.now().millisecondsSinceEpoch}',
-      );
+      final bytes = _lastBackendLabel != null
+          ? LabelCommandBuilder.buildLabel(
+              profile: _printerProfile,
+              data: _lastBackendLabel!,
+            )
+          : LabelCommandBuilder.buildSample(
+              profile: _printerProfile,
+              labelText: _lastBackendLabelText,
+            );
       final written = await _usbPrinterService.write(
         deviceId: _selectedUsbDevice!.deviceId,
         bytes: bytes,
@@ -905,6 +911,7 @@ class ApiClient {
       batchId: (batch['id'] as num).toInt(),
       remindersCreated: (result['remindersCreated'] as num).toInt(),
       labelText: label?['text']?.toString() ?? '',
+      labelData: label != null ? LabelData.fromBackend(label) : null,
     );
   }
 
@@ -1015,9 +1022,11 @@ class PrintResult {
     required this.batchId,
     required this.remindersCreated,
     required this.labelText,
+    this.labelData,
   });
 
   final int batchId;
   final int remindersCreated;
   final String labelText;
+  final LabelData? labelData;
 }

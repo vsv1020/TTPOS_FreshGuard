@@ -171,7 +171,62 @@ class UsbPrinterService {
   }
 }
 
+class LabelData {
+  const LabelData({
+    required this.productName,
+    required this.storeName,
+    required this.printedAt,
+    required this.expiresAt,
+    required this.barcodeData,
+    this.languages,
+    this.allergens,
+    this.storageConditions,
+    this.opened = false,
+  });
+
+  final String productName;
+  final String storeName;
+  final String printedAt;
+  final String expiresAt;
+  final String barcodeData;
+  final List<String>? languages;
+  final String? allergens;
+  final String? storageConditions;
+  final bool opened;
+
+  factory LabelData.fromBackend(Map<String, dynamic> label) {
+    final rawLangs = label['languages'];
+    List<String>? languages;
+    if (rawLangs is List) {
+      languages = rawLangs.map((e) => e.toString()).toList();
+    }
+
+    return LabelData(
+      productName: label['productName']?.toString() ?? '',
+      storeName: label['storeName']?.toString() ?? '',
+      printedAt: label['printedAt']?.toString() ?? '',
+      expiresAt: label['expiresAt']?.toString() ?? '',
+      barcodeData: label['barcodeData']?.toString() ?? '',
+      languages: languages,
+      allergens: label['allergens']?.toString(),
+      storageConditions: label['storageConditions']?.toString(),
+      opened: label['opened'] == true,
+    );
+  }
+}
+
 class LabelCommandBuilder {
+  static Uint8List buildLabel({
+    required PrinterProfile profile,
+    required LabelData data,
+  }) {
+    final command = switch (profile) {
+      PrinterProfile.tspl => _buildStructuredTspl(data),
+      PrinterProfile.cpcl => _buildStructuredCpcl(data),
+    };
+    return Uint8List.fromList(utf8.encode(command));
+  }
+
   static Uint8List buildSample({
     required PrinterProfile profile,
     required String labelText,
@@ -184,6 +239,131 @@ class LabelCommandBuilder {
 
     return Uint8List.fromList(utf8.encode(command));
   }
+
+  // ── Structured label builders (60×40 mm, ~472×320 dots @200dpi) ──────────
+
+  static String _buildStructuredTspl(LabelData data) {
+    final barcode = _sanitizeBarcode(data.barcodeData);
+    final prodDate = _dateOnly(data.printedAt);
+    final expDate = _dateOnly(data.expiresAt);
+
+    final buffer = StringBuffer()
+      ..writeln('SIZE 60 mm,40 mm')
+      ..writeln('GAP 2 mm,0 mm')
+      ..writeln('DIRECTION 1')
+      ..writeln('REFERENCE 0,0')
+      ..writeln('CLS');
+
+    var y = 8;
+
+    // Opened banner
+    if (data.opened) {
+      buffer.writeln('TEXT 20,$y,"2",0,1,1,"** OPENED / 已开封 **"');
+      y += 30;
+    }
+
+    // Product name – larger font (font "3", scale 2×2)
+    final name = _truncate(data.productName, 22);
+    buffer.writeln('TEXT 20,$y,"3",0,2,2,"${_escapeQuoted(name)}"');
+    y += 44;
+
+    // Store name – small
+    final store = _truncate(data.storeName, 30);
+    buffer.writeln('TEXT 20,$y,"0",0,1,1,"${_escapeQuoted(store)}"');
+    y += 24;
+
+    // PROD date
+    buffer.writeln('TEXT 20,$y,"0",0,1,1,"PROD: $prodDate"');
+    y += 22;
+
+    // EXP date – bold via font "2", scale 1×2 for height emphasis
+    buffer.writeln('TEXT 20,$y,"2",0,1,2,"EXP:  $expDate"');
+    y += 32;
+
+    // Allergens (optional)
+    if (data.allergens != null && data.allergens!.isNotEmpty) {
+      final al = _truncate('ALLERGEN: ${data.allergens!}', 36);
+      buffer.writeln('TEXT 20,$y,"0",0,1,1,"${_escapeQuoted(al)}"');
+      y += 22;
+    }
+
+    // Storage conditions (optional)
+    if (data.storageConditions != null && data.storageConditions!.isNotEmpty) {
+      final sc = _truncate('STORE: ${data.storageConditions!}', 36);
+      buffer.writeln('TEXT 20,$y,"0",0,1,1,"${_escapeQuoted(sc)}"');
+      y += 22;
+    }
+
+    // Barcode + human-readable text at bottom
+    final barcodeY = 232;
+    buffer
+      ..writeln('BARCODE 20,$barcodeY,"128",60,1,0,2,2,"$barcode"')
+      ..writeln('TEXT 20,${barcodeY + 64},"0",0,1,1,"${_escapeQuoted(data.barcodeData)}"')
+      ..writeln('PRINT 1,1');
+
+    return buffer.toString();
+  }
+
+  static String _buildStructuredCpcl(LabelData data) {
+    final barcode = _sanitizeBarcode(data.barcodeData);
+    final prodDate = _dateOnly(data.printedAt);
+    final expDate = _dateOnly(data.expiresAt);
+
+    final buffer = StringBuffer()
+      ..writeln('! 0 200 200 340 1')
+      ..writeln('LEFT');
+
+    var y = 10;
+
+    // Opened banner
+    if (data.opened) {
+      buffer.writeln('TEXT 0 3 10 $y "** OPENED / 已开封 **"');
+      y += 28;
+    }
+
+    // Product name – larger font (font 4 = larger in CPCL)
+    final name = _truncate(data.productName, 22);
+    buffer.writeln('TEXT 0 4 10 $y "${_escapeQuoted(name)}"');
+    y += 36;
+
+    // Store name
+    final store = _truncate(data.storeName, 30);
+    buffer.writeln('TEXT 0 0 10 $y "${_escapeQuoted(store)}"');
+    y += 22;
+
+    // PROD date
+    buffer.writeln('TEXT 0 0 10 $y "PROD: $prodDate"');
+    y += 20;
+
+    // EXP date – font 3 for emphasis
+    buffer.writeln('TEXT 0 3 10 $y "EXP:  $expDate"');
+    y += 28;
+
+    // Allergens (optional)
+    if (data.allergens != null && data.allergens!.isNotEmpty) {
+      final al = _truncate('ALLERGEN: ${data.allergens!}', 36);
+      buffer.writeln('TEXT 0 0 10 $y "${_escapeQuoted(al)}"');
+      y += 20;
+    }
+
+    // Storage conditions (optional)
+    if (data.storageConditions != null && data.storageConditions!.isNotEmpty) {
+      final sc = _truncate('STORE: ${data.storageConditions!}', 36);
+      buffer.writeln('TEXT 0 0 10 $y "${_escapeQuoted(sc)}"');
+      y += 20;
+    }
+
+    // Barcode + human-readable text at bottom
+    buffer
+      ..writeln('BARCODE 128 1 1 60 10 240 "$barcode"')
+      ..writeln('TEXT 0 0 10 305 "${_escapeQuoted(data.barcodeData)}"')
+      ..writeln('FORM')
+      ..writeln('PRINT');
+
+    return buffer.toString();
+  }
+
+  // ── Legacy text-dump builders (kept for buildSample) ─────────────────────
 
   static String _buildTspl({required String labelText, required String barcodeData}) {
     final lines = _normalizeLines(labelText);
@@ -249,6 +429,18 @@ class LabelCommandBuilder {
       return '000000';
     }
     return sanitized;
+  }
+
+  /// Returns just the YYYY-MM-DD portion of an ISO date string.
+  static String _dateOnly(String isoDate) {
+    if (isoDate.length >= 10) return isoDate.substring(0, 10);
+    return isoDate;
+  }
+
+  /// Truncates [text] to [maxChars] characters to avoid label overflow.
+  static String _truncate(String text, int maxChars) {
+    if (text.length <= maxChars) return text;
+    return '${text.substring(0, maxChars - 1)}~';
   }
 }
 

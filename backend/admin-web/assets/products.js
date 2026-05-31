@@ -8,46 +8,65 @@ const primaryLanguageSelect = document.getElementById('product-primary-language'
 const secondaryLanguageSelect = document.getElementById('product-secondary-language');
 const printerSelectedHint = document.getElementById('printer-selected-hint');
 
+const editModal = document.getElementById('edit-modal');
+const editProductForm = document.getElementById('edit-product-form');
+const editBrandSelect = document.getElementById('edit-product-brand');
+const editLabelLanguageSelect = document.getElementById('edit-product-label-language');
+const editPrimaryLanguageSelect = document.getElementById('edit-product-primary-language');
+const editSecondaryLanguageSelect = document.getElementById('edit-product-secondary-language');
+const editCancelBtn = document.getElementById('edit-cancel-btn');
+
 let brands = [];
 let stores = [];
 const LANGUAGE_OPTIONS = ['en', 'es', 'fr', 'zh'];
 
 function renderBrandSelect() {
-  brandSelect.innerHTML = brands.map((brand) => `<option value="${brand.id}">${brand.name}</option>`).join('');
+  const esc = window.AdminCommon.esc;
+  const options = brands.map((brand) => `<option value="${esc(brand.id)}">${esc(brand.name)}</option>`).join('');
+  brandSelect.innerHTML = options;
+  editBrandSelect.innerHTML = options;
 }
 
 function renderStoreSelect() {
+  const esc = window.AdminCommon.esc;
   storeSelect.innerHTML = stores
-    .map((store) => `<option value="${store.id}">${store.brandName} / ${store.name}</option>`)
+    .map((store) => `<option value="${esc(store.id)}">${esc(store.brandName)} / ${esc(store.name)}</option>`)
     .join('');
   syncPrinterFormWithSelectedStore();
 }
 
 function renderProducts(products) {
+  const esc = window.AdminCommon.esc;
   productsTable.innerHTML = products
     .map(
       (product) => `<tr>
-      <td>${product.brandName}</td>
-      <td>${product.name}</td>
-      <td>${product.sku || '-'}</td>
-      <td>${product.shelfLifeDays}</td>
-      <td>${product.labelLanguage}</td>
-      <td>${product.primaryLanguage}</td>
-      <td>${product.secondaryLanguage || '-'}</td>
+      <td>${esc(product.brandName)}</td>
+      <td>${esc(product.name)}</td>
+      <td>${esc(product.sku || '-')}</td>
+      <td>${esc(product.shelfLifeDays)}</td>
+      <td>${esc(product.labelLanguage)}</td>
+      <td>${esc(product.primaryLanguage)}</td>
+      <td>${esc(product.secondaryLanguage || '-')}</td>
+      <td>${esc(product.allergens || '-')}</td>
+      <td>${esc(product.storageConditions || '-')}</td>
+      <td>${esc(product.openedShelfLifeHours != null ? product.openedShelfLifeHours : '-')}</td>
+      <td style="white-space:nowrap;">
+        <button type="button" data-action="edit" data-id="${esc(product.id)}" style="background:#0369a1;padding:6px 10px;font-size:0.82rem;">Edit</button>
+        <button type="button" data-action="delete" data-id="${esc(product.id)}" style="background:#b91c1c;padding:6px 10px;font-size:0.82rem;margin-left:4px;">Delete</button>
+      </td>
     </tr>`
     )
     .join('');
 }
 
 function renderLanguageSelects() {
-  primaryLanguageSelect.innerHTML = LANGUAGE_OPTIONS.map(
-    (lang) => `<option value="${lang}">${lang}</option>`
-  ).join('');
+  const options = LANGUAGE_OPTIONS.map((lang) => `<option value="${lang}">${lang}</option>`).join('');
+  const noneOption = '<option value="">none</option>';
 
-  secondaryLanguageSelect.innerHTML = [
-    '<option value="">none</option>',
-    ...LANGUAGE_OPTIONS.map((lang) => `<option value="${lang}">${lang}</option>`)
-  ].join('');
+  primaryLanguageSelect.innerHTML = options;
+  secondaryLanguageSelect.innerHTML = noneOption + options;
+  editPrimaryLanguageSelect.innerHTML = options;
+  editSecondaryLanguageSelect.innerHTML = noneOption + options;
 
   primaryLanguageSelect.value = 'en';
 }
@@ -58,6 +77,15 @@ function syncSecondaryLanguageRequired() {
   secondaryLanguageSelect.disabled = !isBilingual;
   if (!isBilingual) {
     secondaryLanguageSelect.value = '';
+  }
+}
+
+function syncEditSecondaryLanguageRequired() {
+  const isBilingual = editLabelLanguageSelect.value === 'bilingual';
+  editSecondaryLanguageSelect.required = isBilingual;
+  editSecondaryLanguageSelect.disabled = !isBilingual;
+  if (!isBilingual) {
+    editSecondaryLanguageSelect.value = '';
   }
 }
 
@@ -99,6 +127,31 @@ function syncPrinterFormWithSelectedStore() {
   applyStorePrinterSettings(store);
 }
 
+function openEditModal(product) {
+  document.getElementById('edit-product-id').value = product.id;
+  editBrandSelect.value = String(product.brandId);
+  document.getElementById('edit-product-name').value = product.name || '';
+  document.getElementById('edit-product-sku').value = product.sku || '';
+  document.getElementById('edit-product-shelf-life').value = product.shelfLifeDays ?? '';
+  editLabelLanguageSelect.value = product.labelLanguage || 'single';
+  editPrimaryLanguageSelect.value = product.primaryLanguage || 'en';
+
+  syncEditSecondaryLanguageRequired();
+  editSecondaryLanguageSelect.value = product.secondaryLanguage || '';
+
+  document.getElementById('edit-product-allergens').value = product.allergens || '';
+  document.getElementById('edit-product-storage-conditions').value = product.storageConditions || '';
+  document.getElementById('edit-product-opened-shelf-life-hours').value =
+    product.openedShelfLifeHours != null ? product.openedShelfLifeHours : '';
+
+  editModal.style.display = 'flex';
+}
+
+function closeEditModal() {
+  editModal.style.display = 'none';
+  editProductForm.reset();
+}
+
 async function loadAll() {
   const [brandRes, storeRes, productsRes] = await Promise.all([
     window.AdminCommon.requestJson('/api/admin/brands'),
@@ -125,7 +178,10 @@ productForm.addEventListener('submit', async (event) => {
     shelfLifeDays: Number(document.getElementById('product-shelf-life').value),
     labelLanguage: labelLanguageSelect.value,
     primaryLanguage: primaryLanguageSelect.value,
-    secondaryLanguage: secondaryLanguageSelect.value
+    secondaryLanguage: secondaryLanguageSelect.value,
+    allergens: textOrNull(document.getElementById('product-allergens').value),
+    storageConditions: textOrNull(document.getElementById('product-storage-conditions').value),
+    openedShelfLifeHours: parseNumberOrNull(document.getElementById('product-opened-shelf-life-hours').value)
   };
 
   try {
@@ -141,6 +197,73 @@ productForm.addEventListener('submit', async (event) => {
     window.AdminCommon.setPageMessage('Product created.');
   } catch (error) {
     window.AdminCommon.setPageMessage(error.message, true);
+  }
+});
+
+editProductForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  window.AdminCommon.setPageMessage('');
+
+  const id = document.getElementById('edit-product-id').value;
+  const payload = {
+    brandId: Number(editBrandSelect.value),
+    name: document.getElementById('edit-product-name').value.trim(),
+    sku: document.getElementById('edit-product-sku').value.trim(),
+    shelfLifeDays: Number(document.getElementById('edit-product-shelf-life').value),
+    labelLanguage: editLabelLanguageSelect.value,
+    primaryLanguage: editPrimaryLanguageSelect.value,
+    secondaryLanguage: editSecondaryLanguageSelect.value,
+    allergens: textOrNull(document.getElementById('edit-product-allergens').value),
+    storageConditions: textOrNull(document.getElementById('edit-product-storage-conditions').value),
+    openedShelfLifeHours: parseNumberOrNull(document.getElementById('edit-product-opened-shelf-life-hours').value)
+  };
+
+  try {
+    await window.AdminCommon.requestJson(`/api/admin/products/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload)
+    });
+    closeEditModal();
+    await loadAll();
+    window.AdminCommon.setPageMessage('Product updated.');
+  } catch (error) {
+    window.AdminCommon.setPageMessage(error.message, true);
+  }
+});
+
+productsTable.addEventListener('click', async (event) => {
+  const btn = event.target.closest('button[data-action]');
+  if (!btn) {
+    return;
+  }
+
+  const id = btn.dataset.id;
+  const action = btn.dataset.action;
+
+  if (action === 'edit') {
+    const res = await window.AdminCommon.requestJson('/api/admin/products');
+    if (!res) {
+      return;
+    }
+    const product = res.products.find((p) => String(p.id) === String(id));
+    if (product) {
+      openEditModal(product);
+    }
+    return;
+  }
+
+  if (action === 'delete') {
+    if (!confirm('Delete this product? This cannot be undone.')) {
+      return;
+    }
+    window.AdminCommon.setPageMessage('');
+    try {
+      await window.AdminCommon.requestJson(`/api/admin/products/${id}`, { method: 'DELETE' });
+      await loadAll();
+      window.AdminCommon.setPageMessage('Product deleted.');
+    } catch (error) {
+      window.AdminCommon.setPageMessage(error.message, true);
+    }
   }
 });
 
@@ -169,6 +292,14 @@ printerForm.addEventListener('submit', async (event) => {
     window.AdminCommon.setPageMessage('Printer settings updated.');
   } catch (error) {
     window.AdminCommon.setPageMessage(error.message, true);
+  }
+});
+
+editLabelLanguageSelect.addEventListener('change', syncEditSecondaryLanguageRequired);
+editCancelBtn.addEventListener('click', closeEditModal);
+editModal.addEventListener('click', (event) => {
+  if (event.target === editModal) {
+    closeEditModal();
   }
 });
 

@@ -33,6 +33,9 @@
           <select id="product-primary-language" required></select>
           <select id="product-secondary-language"></select>
           <p class="hint">Bilingual labels require a secondary language.</p>
+          <input id="product-allergens" placeholder="Allergens (optional)" />
+          <input id="product-storage-conditions" placeholder="Storage conditions (optional)" />
+          <input id="product-opened-shelf-life-hours" type="number" placeholder="Opened shelf life hours (optional)" />
           <button type="submit">Create Product</button>
         </form>
       </section>
@@ -64,12 +67,44 @@
               <th>Label Language</th>
               <th>Primary</th>
               <th>Secondary</th>
+              <th>Allergens</th>
+              <th>Storage Conditions</th>
+              <th>Opened Shelf Life (h)</th>
+              <th></th>
             </tr>
           </thead>
           <tbody id="products-table"></tbody>
         </table>
       </section>
     </main>
+
+    <!-- Edit Product Modal -->
+    <div id="edit-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:100;align-items:center;justify-content:center;">
+      <div class="card" style="width:min(480px,94vw);max-height:90vh;overflow-y:auto;">
+        <h2>Edit Product</h2>
+        <form id="edit-product-form" class="stack">
+          <input type="hidden" id="edit-product-id" />
+          <select id="edit-product-brand" required></select>
+          <input id="edit-product-name" placeholder="Product name" required />
+          <input id="edit-product-sku" placeholder="SKU" />
+          <input id="edit-product-shelf-life" type="number" placeholder="Shelf life days" required />
+          <select id="edit-product-label-language" required>
+            <option value="single">single</option>
+            <option value="bilingual">bilingual</option>
+          </select>
+          <select id="edit-product-primary-language" required></select>
+          <select id="edit-product-secondary-language"></select>
+          <p class="hint">Bilingual labels require a secondary language.</p>
+          <input id="edit-product-allergens" placeholder="Allergens (optional)" />
+          <input id="edit-product-storage-conditions" placeholder="Storage conditions (optional)" />
+          <input id="edit-product-opened-shelf-life-hours" type="number" placeholder="Opened shelf life hours (optional)" />
+          <div style="display:flex;gap:8px;">
+            <button type="submit" style="flex:1;">Save Changes</button>
+            <button type="button" id="edit-cancel-btn" style="flex:1;background:#64748b;">Cancel</button>
+          </div>
+        </form>
+      </div>
+    </div>
 
     <p id="page-message" class="page-message"></p>
 

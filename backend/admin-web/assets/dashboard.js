@@ -18,10 +18,11 @@ async function loadDashboard() {
 
     sessionEl.textContent = window.AdminCommon.pretty(me);
     usersEl.textContent = window.AdminCommon.pretty(users);
+    const esc = window.AdminCommon.esc;
     statsBox.innerHTML = `
-      <div><strong>Brands:</strong> ${brands.brands.length}</div>
-      <div><strong>Stores:</strong> ${stores.stores.length}</div>
-      <div><strong>Products:</strong> ${products.products.length}</div>
+      <div><strong>Brands:</strong> ${esc(brands.brands.length)}</div>
+      <div><strong>Stores:</strong> ${esc(stores.stores.length)}</div>
+      <div><strong>Products:</strong> ${esc(products.products.length)}</div>
     `;
   } catch (error) {
     sessionEl.textContent = `Error: ${error.message}`;

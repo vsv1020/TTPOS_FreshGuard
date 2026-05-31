@@ -9,12 +9,14 @@ let brands = [];
 let stores = [];
 
 function renderBrandSelect() {
-  brandSelect.innerHTML = brands.map((brand) => `<option value="${brand.id}">${brand.name}</option>`).join('');
+  const esc = window.AdminCommon.esc;
+  brandSelect.innerHTML = brands.map((brand) => `<option value="${esc(brand.id)}">${esc(brand.name)}</option>`).join('');
 }
 
 function renderStoreSelect() {
+  const esc = window.AdminCommon.esc;
   storeSelect.innerHTML = stores
-    .map((store) => `<option value="${store.id}">${store.brandName} / ${store.name}</option>`)
+    .map((store) => `<option value="${esc(store.id)}">${esc(store.brandName)} / ${esc(store.name)}</option>`)
     .join('');
 }
 
@@ -29,16 +31,17 @@ function getBindingStatus(row) {
 }
 
 function renderBindingTable(codes) {
+  const esc = window.AdminCommon.esc;
   bindingTable.innerHTML = codes
     .map(
       (row) => `<tr>
-      <td>${row.code}</td>
-      <td>${row.brandName}</td>
-      <td>${row.storeName}</td>
-      <td>${row.expiresAt || '-'}</td>
-      <td>${getBindingStatus(row)}</td>
-      <td>${row.usedAt || '-'}</td>
-      <td>${row.boundDeviceId || '-'}</td>
+      <td>${esc(row.code)}</td>
+      <td>${esc(row.brandName)}</td>
+      <td>${esc(row.storeName)}</td>
+      <td>${esc(row.expiresAt || '-')}</td>
+      <td>${esc(getBindingStatus(row))}</td>
+      <td>${esc(row.usedAt || '-')}</td>
+      <td>${esc(row.boundDeviceId || '-')}</td>
     </tr>`
     )
     .join('');

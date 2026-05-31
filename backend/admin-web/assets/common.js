@@ -52,8 +52,15 @@
     target.classList.toggle('error', Boolean(isError));
   }
 
+  function esc(s) {
+    const d = document.createElement('div');
+    d.textContent = s == null ? '' : String(s);
+    return d.innerHTML;
+  }
+
   window.AdminCommon = {
     bindLogout,
+    esc,
     pretty,
     requestJson,
     setPageMessage

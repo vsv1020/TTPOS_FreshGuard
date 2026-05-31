@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>FreshGuard Admin - Staff</title>
+    <link rel="stylesheet" href="/admin/assets/styles.css" />
+  </head>
+  <body class="dashboard-page">
+    <header class="topbar">
+      <h1>FreshGuard Admin</h1>
+      <nav class="topnav">
+        <a href="/admin/dashboard">Dashboard</a>
+        <a href="/admin/binding">Binding</a>
+        <a href="/admin/products">Products</a>
+        <a class="active" href="/admin/staff">Staff</a>
+        <a href="/admin/label-templates">Labels</a>
+        <a href="/admin/report">Report</a>
+      </nav>
+      <button id="logout-btn" type="button">Log Out</button>
+    </header>
+
+    <main class="dashboard-grid">
+      <section class="panel">
+        <h2>Select Store</h2>
+        <select id="store-select"></select>
+      </section>
+
+      <section class="panel">
+        <h2>Add Staff</h2>
+        <form id="staff-form" class="stack">
+          <input id="staff-name" placeholder="Staff name" required />
+          <input id="staff-pin" placeholder="PIN" required />
+          <select id="staff-role">
+            <option value="staff">staff</option>
+            <option value="manager">manager</option>
+          </select>
+          <button type="submit">Add Staff</button>
+        </form>
+      </section>
+
+      <section class="panel wide">
+        <h2>Staff</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Name</th>
+              <th>Role</th>
+              <th>Active</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="staff-table"></tbody>
+        </table>
+      </section>
+    </main>
+
+    <!-- Edit Staff Modal -->
+    <div id="edit-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:100;align-items:center;justify-content:center;">
+      <div class="card" style="width:min(420px,94vw);max-height:90vh;overflow-y:auto;">
+        <h2>Edit Staff</h2>
+        <form id="edit-staff-form" class="stack">
+          <input type="hidden" id="edit-staff-id" />
+          <input id="edit-staff-name" placeholder="Staff name" required />
+          <input id="edit-staff-pin" placeholder="New PIN (leave blank to keep)" />
+          <select id="edit-staff-role">
+            <option value="staff">staff</option>
+            <option value="manager">manager</option>
+          </select>
+          <label style="display:flex;align-items:center;gap:8px;font-weight:600;">
+            <input type="checkbox" id="edit-staff-active" style="width:auto;padding:0;border:none;" />
+            Active
+          </label>
+          <div style="display:flex;gap:8px;">
+            <button type="submit" style="flex:1;">Save Changes</button>
+            <button type="button" id="edit-cancel-btn" style="flex:1;background:#64748b;">Cancel</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <p id="page-message" class="page-message"></p>
+
+    <script src="/admin/assets/common.js"></script>
+    <script src="/admin/assets/staff.js"></script>
+  </body>
+</html>

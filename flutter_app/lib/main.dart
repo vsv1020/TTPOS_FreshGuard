@@ -89,7 +89,7 @@ class _FreshGuardStoreAppState extends State<FreshGuardStoreApp> {
 class BindScreen extends StatefulWidget {
   const BindScreen({super.key, required this.onBound});
 
-  final ValueChanged<AppSession> onBound;
+  final Future<void> Function(AppSession) onBound;
 
   @override
   State<BindScreen> createState() => _BindScreenState();
@@ -227,6 +227,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
   bool _busy = false;
   String? _message;
 
+  // Staff attribution (session-scoped, not persisted).
+  StaffItem? _currentStaff;
+
   @override
   void initState() {
     super.initState();
@@ -238,6 +241,42 @@ class _DashboardScreenState extends State<DashboardScreen> {
     await _loadPrinterSettings();
     await _refreshUsbDevices(clearMessage: false);
     await _loadAll();
+  }
+
+  /// Shows a staff-picker + PIN dialog.
+  ///
+  /// Returns:
+  ///   - `(skipped: true, staff: null)`  — no staff configured, proceed without attribution.
+  ///   - `(skipped: false, staff: item)` — staff verified, proceed with attribution.
+  ///   - `(skipped: false, staff: null)` — user cancelled, caller should abort.
+  Future<({bool skipped, StaffItem? staff})> _pickStaff() async {
+    List<StaffItem> staffList;
+    try {
+      staffList = await _api.fetchStaff();
+    } catch (error) {
+      if (!mounted) return (skipped: false, staff: null);
+      setState(() {
+        _message = 'Failed to load staff: ${error.toString().replaceFirst('Exception: ', '')}';
+      });
+      return (skipped: false, staff: null);
+    }
+
+    if (staffList.isEmpty) {
+      return (skipped: true, staff: null);
+    }
+
+    if (!mounted) return (skipped: false, staff: null);
+
+    final picked = await showDialog<StaffItem>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => _StaffPinDialog(
+        staffList: staffList,
+        preSelected: _currentStaff,
+        onVerify: (staffId, pin) => _api.verifyStaffPin(staffId: staffId, pin: pin),
+      ),
+    );
+    return (skipped: false, staff: picked);
   }
 
   Future<void> _loadAll() async {
@@ -293,13 +332,29 @@ class _DashboardScreenState extends State<DashboardScreen> {
       return;
     }
 
+    final staffResult = await _pickStaff();
+    if (!mounted) return;
+    if (!staffResult.skipped && staffResult.staff == null) {
+      // User cancelled the staff/PIN dialog (or error loading staff).
+      return;
+    }
+    if (staffResult.staff != null) {
+      setState(() {
+        _currentStaff = staffResult.staff;
+      });
+    }
+
     setState(() {
       _busy = true;
       _message = null;
     });
 
     try {
-      final result = await _api.printLabels(productId: _selectedProductId!, quantity: quantity);
+      final result = await _api.printLabels(
+        productId: _selectedProductId!,
+        quantity: quantity,
+        staffId: _currentStaff?.id,
+      );
       final reminders = await _api.fetchReminders(status: _reminderStatus);
 
       if (!mounted) {
@@ -330,13 +385,28 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   Future<void> _handleReminder(ReminderItem reminder, String reason) async {
+    final staffResult = await _pickStaff();
+    if (!mounted) return;
+    if (!staffResult.skipped && staffResult.staff == null) {
+      return;
+    }
+    if (staffResult.staff != null) {
+      setState(() {
+        _currentStaff = staffResult.staff;
+      });
+    }
+
     setState(() {
       _busy = true;
       _message = null;
     });
 
     try {
-      await _api.handleReminder(reminderId: reminder.id, reason: reason);
+      await _api.handleReminder(
+        reminderId: reminder.id,
+        reason: reason,
+        staffId: _currentStaff?.id,
+      );
       final reminders = await _api.fetchReminders(status: _reminderStatus);
 
       if (!mounted) {
@@ -553,6 +623,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
             ],
           ),
           actions: [
+            if (_currentStaff != null)
+              TextButton.icon(
+                onPressed: () => setState(() => _currentStaff = null),
+                icon: const Icon(Icons.person, size: 18),
+                label: Text(
+                  _currentStaff!.name,
+                  style: const TextStyle(fontSize: 13),
+                ),
+              ),
             IconButton(onPressed: _busy ? null : _loadAll, icon: const Icon(Icons.refresh)),
             IconButton(onPressed: widget.onLogout, icon: const Icon(Icons.logout)),
           ],
@@ -895,14 +974,35 @@ class ApiClient {
     return items.map((item) => ProductItem.fromJson(item as Map<String, dynamic>)).toList();
   }
 
-  Future<PrintResult> printLabels({required int productId, required int quantity}) async {
+  Future<List<StaffItem>> fetchStaff() async {
+    final result = await _request('/api/store/staff');
+    final items = result['staff'] as List<dynamic>? ?? [];
+    return items.map((item) => StaffItem.fromJson(item as Map<String, dynamic>)).toList();
+  }
+
+  Future<bool> verifyStaffPin({required int staffId, required String pin}) async {
+    final result = await _request(
+      '/api/store/staff/$staffId/verify-pin',
+      method: 'POST',
+      body: {'pin': pin},
+    );
+    return result['valid'] == true;
+  }
+
+  Future<PrintResult> printLabels({
+    required int productId,
+    required int quantity,
+    int? staffId,
+  }) async {
+    final body = <String, dynamic>{
+      'productId': productId,
+      'quantity': quantity,
+    };
+    if (staffId != null) body['staffId'] = staffId;
     final result = await _request(
       '/api/store/print',
       method: 'POST',
-      body: {
-        'productId': productId,
-        'quantity': quantity,
-      },
+      body: body,
     );
 
     final batch = result['batch'] as Map<String, dynamic>;
@@ -922,11 +1022,17 @@ class ApiClient {
     return items.map((item) => ReminderItem.fromJson(item as Map<String, dynamic>)).toList();
   }
 
-  Future<void> handleReminder({required int reminderId, required String reason}) async {
+  Future<void> handleReminder({
+    required int reminderId,
+    required String reason,
+    int? staffId,
+  }) async {
+    final body = <String, dynamic>{'reason': reason};
+    if (staffId != null) body['staffId'] = staffId;
     await _request(
       '/api/store/reminders/$reminderId/handle',
       method: 'POST',
-      body: {'reason': reason},
+      body: body,
     );
   }
 }
@@ -1029,4 +1135,159 @@ class PrintResult {
   final int remindersCreated;
   final String labelText;
   final LabelData? labelData;
+}
+
+class StaffItem {
+  const StaffItem({
+    required this.id,
+    required this.name,
+    required this.role,
+  });
+
+  final int id;
+  final String name;
+  final String role;
+
+  factory StaffItem.fromJson(Map<String, dynamic> json) {
+    return StaffItem(
+      id: (json['id'] as num).toInt(),
+      name: json['name'] as String,
+      role: json['role'] as String? ?? 'staff',
+    );
+  }
+}
+
+/// Modal dialog: pick a staff member then enter PIN.
+/// Calls [onVerify] to check the PIN; pops with the [StaffItem] on success.
+class _StaffPinDialog extends StatefulWidget {
+  const _StaffPinDialog({
+    required this.staffList,
+    required this.onVerify,
+    this.preSelected,
+  });
+
+  final List<StaffItem> staffList;
+  final StaffItem? preSelected;
+  final Future<bool> Function(int staffId, String pin) onVerify;
+
+  @override
+  State<_StaffPinDialog> createState() => _StaffPinDialogState();
+}
+
+class _StaffPinDialogState extends State<_StaffPinDialog> {
+  late StaffItem _selected;
+  final _pinController = TextEditingController();
+  bool _verifying = false;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _selected = widget.preSelected != null &&
+            widget.staffList.any((s) => s.id == widget.preSelected!.id)
+        ? widget.staffList.firstWhere((s) => s.id == widget.preSelected!.id)
+        : widget.staffList.first;
+  }
+
+  @override
+  void dispose() {
+    _pinController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _confirm() async {
+    final pin = _pinController.text.trim();
+    if (pin.isEmpty) {
+      setState(() => _error = 'Enter PIN');
+      return;
+    }
+
+    setState(() {
+      _verifying = true;
+      _error = null;
+    });
+
+    try {
+      final valid = await widget.onVerify(_selected.id, pin);
+      if (!mounted) return;
+      if (valid) {
+        Navigator.of(context).pop(_selected);
+      } else {
+        setState(() {
+          _error = 'Incorrect PIN. Try again.';
+          _verifying = false;
+        });
+      }
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _error = error.toString().replaceFirst('Exception: ', '');
+        _verifying = false;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Operator verification'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          DropdownButtonFormField<StaffItem>(
+            value: _selected,
+            decoration: const InputDecoration(labelText: 'Staff member'),
+            items: widget.staffList
+                .map(
+                  (s) => DropdownMenuItem<StaffItem>(
+                    value: s,
+                    child: Text('${s.name} (${s.role})'),
+                  ),
+                )
+                .toList(),
+            onChanged: _verifying
+                ? null
+                : (value) {
+                    if (value != null) {
+                      setState(() {
+                        _selected = value;
+                        _error = null;
+                        _pinController.clear();
+                      });
+                    }
+                  },
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _pinController,
+            obscureText: true,
+            keyboardType: TextInputType.number,
+            decoration: const InputDecoration(labelText: 'PIN'),
+            onSubmitted: _verifying ? null : (_) => _confirm(),
+          ),
+          if (_error != null) ...[
+            const SizedBox(height: 8),
+            Text(_error!, style: const TextStyle(color: Colors.red, fontSize: 13)),
+          ],
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: _verifying ? null : () => Navigator.of(context).pop(null),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: _verifying ? null : _confirm,
+          child: _verifying
+              ? const SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Text('Confirm'),
+        ),
+      ],
+    );
+  }
 }

@@ -182,6 +182,8 @@ class LabelData {
     this.allergens,
     this.storageConditions,
     this.opened = false,
+    this.templateBody,
+    this.fields,
   });
 
   final String productName;
@@ -193,12 +195,23 @@ class LabelData {
   final String? allergens;
   final String? storageConditions;
   final bool opened;
+  /// Raw template body from the backend (used by admin preview; Flutter
+  /// continues to use structured TSPL/CPCL layout via [buildLabel]).
+  final String? templateBody;
+  /// Structured fields map returned by the backend alongside templateBody.
+  final Map<String, dynamic>? fields;
 
   factory LabelData.fromBackend(Map<String, dynamic> label) {
     final rawLangs = label['languages'];
     List<String>? languages;
     if (rawLangs is List) {
       languages = rawLangs.map((e) => e.toString()).toList();
+    }
+
+    Map<String, dynamic>? fields;
+    final rawFields = label['fields'];
+    if (rawFields is Map) {
+      fields = Map<String, dynamic>.from(rawFields);
     }
 
     return LabelData(
@@ -211,6 +224,8 @@ class LabelData {
       allergens: label['allergens']?.toString(),
       storageConditions: label['storageConditions']?.toString(),
       opened: label['opened'] == true,
+      templateBody: label['templateBody']?.toString(),
+      fields: fields,
     );
   }
 }

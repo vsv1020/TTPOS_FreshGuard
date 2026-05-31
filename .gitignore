@@ -9,3 +9,7 @@ flutter_app/android/app/build/
 flutter_app/android/local.properties
 backend/data/*.sqlite
 backend/.env
+
+# flutter generated
+flutter_app/.flutter-plugins-dependencies
+flutter_app/.dart_tool/

@@ -58,7 +58,7 @@ async function load() {
   try {
     const res = await getStoreTemplate(route.params.id)
     template.value = res.template || res
-    items.value = res.items || []
+    items.value = res.template?.checkItems || res.checkItems || res.items || []
     
     // Initialize scores
     items.value.forEach(item => {
@@ -68,7 +68,7 @@ async function load() {
 
     // Start inspection
     const startRes = await startInspection({ template_id: route.params.id })
-    inspectionId.value = startRes.inspection_id || startRes.id
+    inspectionId.value = startRes.inspection?.id || startRes.id
   } catch {} finally { loading.value = false }
 }
 
@@ -76,7 +76,7 @@ async function onSubmit() {
   submitting.value = true
   try {
     const results = items.value.map(item => ({
-      check_item_id: item.id,
+      checkItemId: item.id,
       score: scores.value[item.id] || 0,
       note: notes.value[item.id] || '',
       status: scores.value[item.id] >= item.max_score * 0.6 ? 'pass' : 'fail',

@@ -66,7 +66,7 @@ async function loadTemplate() {
   try {
     const res = await getTemplate(route.params.id)
     template.value = res.template || res
-    items.value = res.items || []
+    items.value = res.template?.checkItems || res.checkItems || []
   } catch {} finally { loading.value = false }
 }
 

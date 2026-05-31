@@ -30,7 +30,8 @@
         <template #value>
           <van-rate v-model="scores[currentItem.id]"
             :count="currentItem.max_score"
-            allow-half color="#ee0a24" void-icon="star" void-color="#eee" />
+            allow-half color="#ee0a24" void-icon="star" void-color="#eee"
+            @change="markTouched(currentItem.id)" />
         </template>
       </van-cell>
 
@@ -38,12 +39,13 @@
       <van-cell title="是否合格" v-if="currentItem.type === 'boolean'">
         <template #value>
           <van-switch v-model="passes[currentItem.id]"
-            @change="v => scores[currentItem.id] = v ? currentItem.max_score : 0" />
+            @change="v => { scores[currentItem.id] = v ? currentItem.max_score : 0; markTouched(currentItem.id) }" />
         </template>
       </van-cell>
 
       <!-- Notes -->
-      <van-field v-model="notes[currentItem.id]" label="备注" placeholder="问题描述（选填）" type="textarea" rows="2" />
+      <van-field v-model="notes[currentItem.id]" label="备注" placeholder="问题描述（选填）" type="textarea" rows="2"
+        @input="markTouched(currentItem.id)" />
     </van-cell-group>
 
     <!-- Navigation -->
@@ -80,11 +82,16 @@ const currentStep = ref(0)
 const scores = ref({})
 const notes = ref({})
 const passes = ref({})
+const touchedItems = ref(new Set())
 
 const currentItem = computed(() => items.value[currentStep.value])
 const totalScore = computed(() => Object.values(scores.value).reduce((a, b) => a + (b || 0), 0))
 const maxTotal = computed(() => items.value.reduce((a, b) => a + b.max_score, 0))
-const filledCount = computed(() => Object.keys(scores.value).filter(k => scores.value[k] !== undefined).length)
+const filledCount = computed(() => touchedItems.value.size)
+
+function markTouched(id) {
+  touchedItems.value = new Set([...touchedItems.value, id])
+}
 
 const estimatedGrade = computed(() => {
   if (maxTotal.value === 0) return '-'
@@ -113,11 +120,10 @@ async function startSelfCheck(templateId) {
     // Load template items
     const tpl = await getStoreTemplate(templateId)
     template.value = tpl.template || tpl
-    items.value = template.value.items || []
+    items.value = template.value.checkItems || tpl.checkItems || []
 
-    // Init scores
+    // Init notes only; scores left undefined until user interacts
     items.value.forEach(item => {
-      scores.value[item.id] = item.type === 'boolean' ? item.max_score : 0
       notes.value[item.id] = ''
     })
   } catch (e) {

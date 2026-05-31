@@ -204,11 +204,11 @@ function buildInspectionRoutes({ db, adminAuth, storeAuth }) {
       });
       recordAudit(db, {
         actorType: 'store',
-        actorId: req.storeAuth.storeId,
+        actorId: req.body?.staffId != null ? String(req.body.staffId) : req.storeAuth.storeId,
         action: 'inspection.submit',
         targetType: 'inspection',
         targetId: req.params.id,
-        detail: null,
+        detail: req.body?.staffId != null ? `staff=${req.body.staffId}` : null,
         ip: req.ip || null,
       }).catch(() => {});
       res.json({ inspection });
@@ -252,11 +252,11 @@ function buildInspectionRoutes({ db, adminAuth, storeAuth }) {
       });
       recordAudit(db, {
         actorType: 'store',
-        actorId: req.storeAuth.storeId,
+        actorId: req.body?.staffId != null ? String(req.body.staffId) : req.storeAuth.storeId,
         action: 'inspection.self_check.submit',
         targetType: 'inspection',
         targetId: req.params.id,
-        detail: null,
+        detail: req.body?.staffId != null ? `staff=${req.body.staffId}` : null,
         ip: req.ip || null,
       }).catch(() => {});
       res.json(result);

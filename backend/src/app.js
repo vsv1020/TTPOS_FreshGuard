@@ -19,10 +19,21 @@ const {
   createBatchWithReminders,
   createBindingCode,
   createBrand,
+  createLabelTemplate,
   createProduct,
   createStore,
+  createStoreStaff,
+  deactivateStoreStaff,
+  deleteLabelTemplate,
   deleteProduct,
+  getDashboardSummary,
+  getInspectionScoreTrend,
+  getLabelTemplateById,
+  getLossTrend,
   getProductById,
+  getStoreById,
+  getStoreExpiryRanking,
+  getStoreStaffById,
   getUserByEmail,
   handleReminder,
   listAdminUsers,
@@ -30,14 +41,20 @@ const {
   listBindingCodes,
   listBrands,
   listExpiredHandlingReport,
+  listLabelTemplates,
   listProducts,
   listStoreProducts,
   listStoreReminders,
   listStores,
+  listStoreStaff,
   openReminder,
   recordAudit,
+  renderLabelFromTemplate,
+  updateLabelTemplate,
   updateProduct,
-  updateStorePrinterSettings
+  updateStoreStaff,
+  updateStorePrinterSettings,
+  verifyStoreStaffPin
 } = require('./db');
 
 function respondDataError(res, error) {
@@ -444,6 +461,277 @@ function buildApp({ db, jwtSecret, adminWebDir }) {
     }
   });
 
+  // ─── Feature A: Store staff management (admin) ──────────────────────────
+  // When the admin is brand-scoped, the target store must belong to that brand.
+  async function assertStoreInScope(req, res, storeId) {
+    const store = await getStoreById(db, storeId);
+    if (!store) {
+      res.status(404).json({ error: 'storeId not found' });
+      return null;
+    }
+    if (req.admin.brandId != null && store.brandId !== req.admin.brandId) {
+      res.status(403).json({ error: 'Forbidden' });
+      return null;
+    }
+    return store;
+  }
+
+  app.get('/api/admin/stores/:storeId/staff', adminApiAuth, async (req, res) => {
+    try {
+      const store = await assertStoreInScope(req, res, req.params.storeId);
+      if (!store) return undefined;
+      const staff = await listStoreStaff(db, { storeId: req.params.storeId, includeInactive: true });
+      return res.json({ staff });
+    } catch (error) {
+      return respondDataError(res, error);
+    }
+  });
+
+  app.post('/api/admin/stores/:storeId/staff', adminApiAuth, async (req, res) => {
+    try {
+      const store = await assertStoreInScope(req, res, req.params.storeId);
+      if (!store) return undefined;
+      const staff = await createStoreStaff(db, {
+        storeId: req.params.storeId,
+        name: req.body?.name,
+        pin: req.body?.pin,
+        role: req.body?.role
+      });
+      recordAudit(db, {
+        actorType: 'admin',
+        actorId: req.admin.email,
+        action: 'staff.create',
+        targetType: 'staff',
+        targetId: staff.id,
+        detail: staff.name,
+        ip: req.ip
+      });
+      return res.status(201).json({ staff });
+    } catch (error) {
+      return respondDataError(res, error);
+    }
+  });
+
+  app.patch('/api/admin/stores/:storeId/staff/:staffId', adminApiAuth, async (req, res) => {
+    try {
+      const store = await assertStoreInScope(req, res, req.params.storeId);
+      if (!store) return undefined;
+      const existing = await getStoreStaffById(db, req.params.staffId);
+      if (!existing || existing.storeId !== store.id) {
+        return res.status(404).json({ error: 'staffId not found' });
+      }
+      const staff = await updateStoreStaff(db, req.params.staffId, {
+        name: req.body?.name,
+        pin: req.body?.pin,
+        role: req.body?.role,
+        isActive: req.body?.isActive
+      });
+      recordAudit(db, {
+        actorType: 'admin',
+        actorId: req.admin.email,
+        action: 'staff.update',
+        targetType: 'staff',
+        targetId: staff.id,
+        detail: staff.name,
+        ip: req.ip
+      });
+      return res.json({ staff });
+    } catch (error) {
+      return respondDataError(res, error);
+    }
+  });
+
+  app.delete('/api/admin/stores/:storeId/staff/:staffId', adminApiAuth, async (req, res) => {
+    try {
+      const store = await assertStoreInScope(req, res, req.params.storeId);
+      if (!store) return undefined;
+      const existing = await getStoreStaffById(db, req.params.staffId);
+      if (!existing || existing.storeId !== store.id) {
+        return res.status(404).json({ error: 'staffId not found' });
+      }
+      const staff = await deactivateStoreStaff(db, req.params.staffId);
+      recordAudit(db, {
+        actorType: 'admin',
+        actorId: req.admin.email,
+        action: 'staff.deactivate',
+        targetType: 'staff',
+        targetId: staff.id,
+        detail: staff.name,
+        ip: req.ip
+      });
+      return res.json({ staff });
+    } catch (error) {
+      return respondDataError(res, error);
+    }
+  });
+
+  // ─── Feature B: Dashboard aggregation ───────────────────────────────────
+
+  app.get('/api/admin/dashboard/summary', adminApiAuth, async (req, res) => {
+    try {
+      const brandId = req.admin.brandId != null ? req.admin.brandId : undefined;
+      const summary = await getDashboardSummary(db, { brandId });
+      return res.json({ summary });
+    } catch (error) {
+      return respondDataError(res, error);
+    }
+  });
+
+  app.get('/api/admin/dashboard/ranking', adminApiAuth, async (req, res) => {
+    try {
+      const brandId = req.admin.brandId != null ? req.admin.brandId : undefined;
+      const ranking = await getStoreExpiryRanking(db, {
+        brandId,
+        limit: req.query.limit ? Number(req.query.limit) : undefined
+      });
+      return res.json({ ranking });
+    } catch (error) {
+      return respondDataError(res, error);
+    }
+  });
+
+  app.get('/api/admin/dashboard/loss-trend', adminApiAuth, async (req, res) => {
+    try {
+      const brandId = req.admin.brandId != null ? req.admin.brandId : undefined;
+      const trend = await getLossTrend(db, {
+        brandId,
+        days: req.query.days ? Number(req.query.days) : undefined
+      });
+      return res.json({ trend });
+    } catch (error) {
+      return respondDataError(res, error);
+    }
+  });
+
+  app.get('/api/admin/dashboard/score-trend', adminApiAuth, async (req, res) => {
+    try {
+      const brandId = req.admin.brandId != null ? req.admin.brandId : undefined;
+      const trend = await getInspectionScoreTrend(db, {
+        brandId,
+        days: req.query.days ? Number(req.query.days) : undefined
+      });
+      return res.json({ trend });
+    } catch (error) {
+      return respondDataError(res, error);
+    }
+  });
+
+  // ─── Feature C: Label template CRUD ─────────────────────────────────────
+  // Brand-scoped admins create/list/manage only within their own brand.
+  function resolveTemplateBrandId(req) {
+    return req.admin.brandId != null ? req.admin.brandId : req.body?.brandId;
+  }
+
+  app.get('/api/admin/label-templates', adminApiAuth, async (req, res) => {
+    try {
+      const brandId = req.admin.brandId != null ? req.admin.brandId : (req.query.brandId || undefined);
+      const templates = await listLabelTemplates(db, { brandId });
+      return res.json({ templates });
+    } catch (error) {
+      return respondDataError(res, error);
+    }
+  });
+
+  app.post('/api/admin/label-templates', adminApiAuth, async (req, res) => {
+    try {
+      const template = await createLabelTemplate(db, {
+        brandId: resolveTemplateBrandId(req),
+        name: req.body?.name,
+        widthMm: req.body?.widthMm,
+        heightMm: req.body?.heightMm,
+        dpi: req.body?.dpi,
+        bodyTemplate: req.body?.bodyTemplate,
+        isDefault: req.body?.isDefault
+      });
+      recordAudit(db, {
+        actorType: 'admin',
+        actorId: req.admin.email,
+        action: 'label-template.create',
+        targetType: 'label-template',
+        targetId: template.id,
+        detail: template.name,
+        ip: req.ip
+      });
+      return res.status(201).json({ template });
+    } catch (error) {
+      return respondDataError(res, error);
+    }
+  });
+
+  app.patch('/api/admin/label-templates/:id', adminApiAuth, async (req, res) => {
+    try {
+      const existing = await getLabelTemplateById(db, req.params.id);
+      if (!existing) {
+        return res.status(404).json({ error: 'templateId not found' });
+      }
+      if (req.admin.brandId != null && existing.brandId !== req.admin.brandId) {
+        return res.status(403).json({ error: 'Forbidden' });
+      }
+      const template = await updateLabelTemplate(db, req.params.id, {
+        name: req.body?.name,
+        widthMm: req.body?.widthMm,
+        heightMm: req.body?.heightMm,
+        dpi: req.body?.dpi,
+        bodyTemplate: req.body?.bodyTemplate,
+        isDefault: req.body?.isDefault
+      });
+      recordAudit(db, {
+        actorType: 'admin',
+        actorId: req.admin.email,
+        action: 'label-template.update',
+        targetType: 'label-template',
+        targetId: template.id,
+        detail: template.name,
+        ip: req.ip
+      });
+      return res.json({ template });
+    } catch (error) {
+      return respondDataError(res, error);
+    }
+  });
+
+  app.delete('/api/admin/label-templates/:id', adminApiAuth, async (req, res) => {
+    try {
+      const existing = await getLabelTemplateById(db, req.params.id);
+      if (!existing) {
+        return res.status(404).json({ error: 'templateId not found' });
+      }
+      if (req.admin.brandId != null && existing.brandId !== req.admin.brandId) {
+        return res.status(403).json({ error: 'Forbidden' });
+      }
+      const template = await deleteLabelTemplate(db, req.params.id);
+      recordAudit(db, {
+        actorType: 'admin',
+        actorId: req.admin.email,
+        action: 'label-template.delete',
+        targetType: 'label-template',
+        targetId: template.id,
+        detail: template.name,
+        ip: req.ip
+      });
+      return res.json({ template });
+    } catch (error) {
+      return respondDataError(res, error);
+    }
+  });
+
+  app.post('/api/admin/label-templates/:id/preview', adminApiAuth, async (req, res) => {
+    try {
+      const existing = await getLabelTemplateById(db, req.params.id);
+      if (!existing) {
+        return res.status(404).json({ error: 'templateId not found' });
+      }
+      if (req.admin.brandId != null && existing.brandId !== req.admin.brandId) {
+        return res.status(403).json({ error: 'Forbidden' });
+      }
+      const fields = req.body?.fields && typeof req.body.fields === 'object' ? req.body.fields : (req.body || {});
+      const text = renderLabelFromTemplate(existing.bodyTemplate, fields);
+      return res.json({ text });
+    } catch (error) {
+      return respondDataError(res, error);
+    }
+  });
+
   app.post('/api/store/bind', bindLimiter, async (req, res) => {
     try {
       const { bindingCode, store } = await consumeBindingCode(db, {
@@ -480,22 +768,45 @@ function buildApp({ db, jwtSecret, adminWebDir }) {
     }
   });
 
+  app.get('/api/store/staff', storeApiAuth, async (req, res) => {
+    try {
+      const staff = await listStoreStaff(db, { storeId: req.storeAuth.storeId });
+      return res.json({ staff });
+    } catch (error) {
+      return respondDataError(res, error);
+    }
+  });
+
+  app.post('/api/store/staff/:staffId/verify-pin', storeApiAuth, async (req, res) => {
+    try {
+      const valid = await verifyStoreStaffPin(db, {
+        storeId: req.storeAuth.storeId,
+        staffId: req.params.staffId,
+        pin: req.body?.pin
+      });
+      return res.json({ valid });
+    } catch (error) {
+      return respondDataError(res, error);
+    }
+  });
+
   app.post('/api/store/print', storeApiAuth, async (req, res) => {
     try {
       const result = await createBatchWithReminders(db, {
         storeId: req.storeAuth.storeId,
         productId: req.body?.productId,
         quantity: req.body?.quantity,
-        printedAt: req.body?.printedAt
+        printedAt: req.body?.printedAt,
+        staffId: req.body?.staffId
       });
 
       recordAudit(db, {
         actorType: 'store',
-        actorId: req.storeAuth.storeId,
+        actorId: req.body?.staffId != null ? String(req.body.staffId) : req.storeAuth.storeId,
         action: 'print',
         targetType: 'batch',
         targetId: result.batch.id,
-        detail: `qty=${result.batch.quantity}`,
+        detail: `qty=${result.batch.quantity}${req.body?.staffId != null ? ` staff=${req.body.staffId}` : ''}`,
         ip: req.ip
       });
 
@@ -525,16 +836,17 @@ function buildApp({ db, jwtSecret, adminWebDir }) {
         storeId: req.storeAuth.storeId,
         reminderId: req.params.reminderId,
         reason: req.body?.reason,
-        note: req.body?.note
+        note: req.body?.note,
+        staffId: req.body?.staffId
       });
 
       recordAudit(db, {
         actorType: 'store',
-        actorId: req.storeAuth.storeId,
+        actorId: req.body?.staffId != null ? String(req.body.staffId) : req.storeAuth.storeId,
         action: 'reminder.handle',
         targetType: 'reminder',
         targetId: reminder.id,
-        detail: String(req.body?.reason || ''),
+        detail: `${String(req.body?.reason || '')}${req.body?.staffId != null ? ` staff=${req.body.staffId}` : ''}`,
         ip: req.ip
       });
 
@@ -548,15 +860,17 @@ function buildApp({ db, jwtSecret, adminWebDir }) {
     try {
       const result = await openReminder(db, {
         storeId: req.storeAuth.storeId,
-        reminderId: req.params.reminderId
+        reminderId: req.params.reminderId,
+        staffId: req.body?.staffId
       });
 
       recordAudit(db, {
         actorType: 'store',
-        actorId: req.storeAuth.storeId,
+        actorId: req.body?.staffId != null ? String(req.body.staffId) : req.storeAuth.storeId,
         action: 'reminder.open',
         targetType: 'reminder',
         targetId: result.reminder.id,
+        detail: req.body?.staffId != null ? `staff=${req.body.staffId}` : null,
         ip: req.ip
       });
 
@@ -598,6 +912,14 @@ function buildApp({ db, jwtSecret, adminWebDir }) {
 
   app.get('/admin/report', adminWebAuth, (_req, res) => {
     res.sendFile(path.join(webRoot, 'report.html'));
+  });
+
+  app.get('/admin/staff', adminWebAuth, (_req, res) => {
+    res.sendFile(path.join(webRoot, 'staff.html'));
+  });
+
+  app.get('/admin/label-templates', adminWebAuth, (_req, res) => {
+    res.sendFile(path.join(webRoot, 'label-templates.html'));
   });
 
   app.get('/', (_req, res) => {

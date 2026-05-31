@@ -119,10 +119,36 @@ CREATE TABLE IF NOT EXISTS audit_logs (
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS store_staff (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  store_id INTEGER NOT NULL,
+  name TEXT NOT NULL,
+  pin_hash TEXT NOT NULL,
+  role TEXT NOT NULL DEFAULT 'staff' CHECK (role IN ('manager', 'staff')),
+  is_active INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (store_id) REFERENCES stores(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS label_templates (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  brand_id INTEGER NOT NULL,
+  name TEXT NOT NULL,
+  width_mm INTEGER NOT NULL DEFAULT 60,
+  height_mm INTEGER NOT NULL DEFAULT 40,
+  dpi INTEGER NOT NULL DEFAULT 200,
+  body_template TEXT,
+  is_default INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (brand_id) REFERENCES brands(id) ON DELETE CASCADE
+);
+
 CREATE INDEX IF NOT EXISTS idx_stores_brand ON stores(brand_id);
 CREATE INDEX IF NOT EXISTS idx_products_brand ON products(brand_id);
 CREATE INDEX IF NOT EXISTS idx_binding_codes_store ON binding_codes(store_id);
 CREATE INDEX IF NOT EXISTS idx_reminders_store_expires ON reminders(store_id, expires_at);
+CREATE INDEX IF NOT EXISTS idx_store_staff_store ON store_staff(store_id);
+CREATE INDEX IF NOT EXISTS idx_label_templates_brand ON label_templates(brand_id);
 `;
 
 function nowIso() {
@@ -216,6 +242,15 @@ function renderLabelTemplate({
   return lines.join('\n');
 }
 
+function renderLabelFromTemplate(bodyTemplate, fields = {}) {
+  // Replace {{placeholder}} tokens with the matching field value.
+  // Missing values render as an empty string.
+  return String(bodyTemplate || '').replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (_match, key) => {
+    const value = fields[key];
+    return value == null ? '' : String(value);
+  });
+}
+
 function getStorePrinterSettings(store) {
   return {
     printerName: store.printerName || null,
@@ -268,6 +303,18 @@ async function createDb(filename) {
   const reminderColumns = await db.all('PRAGMA table_info(reminders)');
   if (!reminderColumns.some((col) => col.name === 'note')) {
     await db.exec('ALTER TABLE reminders ADD COLUMN note TEXT');
+  }
+
+  // Idempotent migration: staff attribution columns (HACCP accountability).
+  if (!reminderColumns.some((col) => col.name === 'staff_id')) {
+    await db.exec('ALTER TABLE reminders ADD COLUMN staff_id INTEGER');
+  }
+  const handlingLogColumns = await db.all('PRAGMA table_info(handling_logs)');
+  if (!handlingLogColumns.some((col) => col.name === 'staff_id')) {
+    await db.exec('ALTER TABLE handling_logs ADD COLUMN staff_id INTEGER');
+  }
+  if (!batchColumns.some((col) => col.name === 'printed_by_staff_id')) {
+    await db.exec('ALTER TABLE batches ADD COLUMN printed_by_staff_id INTEGER');
   }
 
   return db;
@@ -894,7 +941,7 @@ async function listStoreProducts(db, storeId) {
   return listProducts(db, { brandId: store.brandId });
 }
 
-async function createBatchWithReminders(db, { storeId, productId, quantity, printedAt }) {
+async function createBatchWithReminders(db, { storeId, productId, quantity, printedAt, staffId }) {
   const normalizedStoreId = requirePositiveInteger(storeId, 'storeId');
   const normalizedProductId = requirePositiveInteger(productId, 'productId');
   const normalizedQuantity = requirePositiveInteger(quantity, 'quantity');
@@ -916,19 +963,22 @@ async function createBatchWithReminders(db, { storeId, productId, quantity, prin
     throw new Error('product does not belong to this store brand');
   }
 
+  const normalizedStaffId = await assertStoreStaff(db, normalizedStoreId, staffId);
+
   const printedAtIso = printedAt ? new Date(printedAt).toISOString() : nowIso();
   const expiresAtIso = addDaysIso(printedAtIso, product.shelfLifeDays);
 
   await db.exec('BEGIN TRANSACTION');
   try {
     const batchInsert = await db.run(
-      `INSERT INTO batches (store_id, product_id, quantity, printed_at, expires_at)
-       VALUES (?, ?, ?, ?, ?)`,
+      `INSERT INTO batches (store_id, product_id, quantity, printed_at, expires_at, printed_by_staff_id)
+       VALUES (?, ?, ?, ?, ?, ?)`,
       normalizedStoreId,
       normalizedProductId,
       normalizedQuantity,
       printedAtIso,
-      expiresAtIso
+      expiresAtIso,
+      normalizedStaffId
     );
 
     // Deterministic, traceable barcode so a scan can be reversed to the batch.
@@ -941,12 +991,13 @@ async function createBatchWithReminders(db, { storeId, productId, quantity, prin
 
     for (let index = 0; index < normalizedQuantity; index += 1) {
       await db.run(
-        `INSERT INTO reminders (batch_id, store_id, product_id, expires_at, status)
-         VALUES (?, ?, ?, ?, 'pending')`,
+        `INSERT INTO reminders (batch_id, store_id, product_id, expires_at, status, staff_id)
+         VALUES (?, ?, ?, ?, 'pending', ?)`,
         batchInsert.lastID,
         normalizedStoreId,
         normalizedProductId,
-        expiresAtIso
+        expiresAtIso,
+        normalizedStaffId
       );
     }
 
@@ -977,8 +1028,15 @@ async function createBatchWithReminders(db, { storeId, productId, quantity, prin
       languages,
       allergens: product.allergens,
       storageConditions: product.storageConditions,
-      barcodeData: batch.barcodeData
+      barcodeData: batch.barcodeData,
+      staffId: normalizedStaffId
     };
+
+    const defaultTemplate = await getDefaultLabelTemplate(db, { brandId: store.brandId });
+    const templateFields = buildLabelTemplateFields(label);
+    const text = defaultTemplate && defaultTemplate.bodyTemplate
+      ? renderLabelFromTemplate(defaultTemplate.bodyTemplate, templateFields)
+      : renderLabelTemplate(label);
 
     return {
       batch,
@@ -987,7 +1045,9 @@ async function createBatchWithReminders(db, { storeId, productId, quantity, prin
       printerSettings: getStorePrinterSettings(store),
       label: {
         ...label,
-        text: renderLabelTemplate(label)
+        templateBody: defaultTemplate ? defaultTemplate.bodyTemplate : null,
+        fields: templateFields,
+        text
       }
     };
   } catch (error) {
@@ -1045,7 +1105,7 @@ async function listStoreReminders(db, { storeId, status = 'expiring', thresholdD
   );
 }
 
-async function handleReminder(db, { storeId, reminderId, reason, note }) {
+async function handleReminder(db, { storeId, reminderId, reason, note, staffId }) {
   const normalizedStoreId = requirePositiveInteger(storeId, 'storeId');
   const normalizedReminderId = requirePositiveInteger(reminderId, 'reminderId');
   const normalizedReason = String(reason || '')
@@ -1056,6 +1116,8 @@ async function handleReminder(db, { storeId, reminderId, reason, note }) {
   if (!HANDLING_REASONS.includes(normalizedReason)) {
     throw new Error('reason must be one of discarded, sold, transferred');
   }
+
+  const normalizedStaffId = await assertStoreStaff(db, normalizedStoreId, staffId);
 
   const handledAt = nowIso();
 
@@ -1080,9 +1142,10 @@ async function handleReminder(db, { storeId, reminderId, reason, note }) {
     // Optimistic lock: AND handled_at IS NULL ensures we win the race
     const updateResult = await db.run(
       `UPDATE reminders
-       SET status = 'handled', handled_at = ?
+       SET status = 'handled', handled_at = ?, staff_id = COALESCE(?, staff_id)
        WHERE id = ? AND handled_at IS NULL`,
       handledAt,
+      normalizedStaffId,
       normalizedReminderId
     );
 
@@ -1091,14 +1154,15 @@ async function handleReminder(db, { storeId, reminderId, reason, note }) {
     }
 
     await db.run(
-      `INSERT INTO handling_logs (reminder_id, store_id, product_id, reason, note, handled_at)
-       VALUES (?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO handling_logs (reminder_id, store_id, product_id, reason, note, handled_at, staff_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
       normalizedReminderId,
       normalizedStoreId,
       reminder.productId,
       normalizedReason,
       normalizedNote,
-      handledAt
+      handledAt,
+      normalizedStaffId
     );
 
     await db.exec('COMMIT');
@@ -1121,9 +1185,10 @@ async function handleReminder(db, { storeId, reminderId, reason, note }) {
   }
 }
 
-async function openReminder(db, { storeId, reminderId }) {
+async function openReminder(db, { storeId, reminderId, staffId }) {
   const normalizedStoreId = requirePositiveInteger(storeId, 'storeId');
   const normalizedReminderId = requirePositiveInteger(reminderId, 'reminderId');
+  const normalizedStaffId = await assertStoreStaff(db, normalizedStoreId, staffId);
 
   await db.exec('BEGIN TRANSACTION');
   try {
@@ -1165,12 +1230,13 @@ async function openReminder(db, { storeId, reminderId }) {
     ).toISOString();
 
     const insertResult = await db.run(
-      `INSERT INTO reminders (batch_id, store_id, product_id, expires_at, status, note)
-       VALUES (?, ?, ?, ?, 'pending', 'opened')`,
+      `INSERT INTO reminders (batch_id, store_id, product_id, expires_at, status, note, staff_id)
+       VALUES (?, ?, ?, ?, 'pending', 'opened', ?)`,
       reminder.batchId,
       normalizedStoreId,
       reminder.productId,
-      expiresAtIso
+      expiresAtIso,
+      normalizedStaffId
     );
 
     await db.exec('COMMIT');
@@ -1202,20 +1268,536 @@ async function openReminder(db, { storeId, reminderId }) {
       allergens: product.allergens,
       storageConditions: product.storageConditions,
       barcodeData: batch ? batch.barcodeData : null,
-      opened: true
+      opened: true,
+      staffId: normalizedStaffId
     };
+
+    const defaultTemplate = await getDefaultLabelTemplate(db, { brandId: store.brandId });
+    const templateFields = buildLabelTemplateFields(label);
+    const text = defaultTemplate && defaultTemplate.bodyTemplate
+      ? renderLabelFromTemplate(defaultTemplate.bodyTemplate, templateFields)
+      : renderLabelTemplate(label);
 
     return {
       reminder: newReminder,
       label: {
         ...label,
-        text: renderLabelTemplate(label)
+        templateBody: defaultTemplate ? defaultTemplate.bodyTemplate : null,
+        fields: templateFields,
+        text
       }
     };
   } catch (error) {
     await db.exec('ROLLBACK');
     throw error;
   }
+}
+
+// ─── Feature A: Store staff (PIN attribution, not an auth boundary) ──────────
+
+async function getStoreStaffById(db, staffId) {
+  return db.get(
+    `SELECT id,
+            store_id AS storeId,
+            name,
+            role,
+            is_active AS isActive,
+            created_at AS createdAt
+     FROM store_staff
+     WHERE id = ?`,
+    requirePositiveInteger(staffId, 'staffId')
+  );
+}
+
+async function createStoreStaff(db, { storeId, name, pin, role }) {
+  const normalizedStoreId = requirePositiveInteger(storeId, 'storeId');
+  const normalizedName = String(name || '').trim();
+  const normalizedPin = String(pin || '').trim();
+  const normalizedRole = String(role || 'staff').trim().toLowerCase();
+
+  if (!normalizedName) {
+    throw new Error('Staff name is required');
+  }
+  if (!normalizedPin) {
+    throw new Error('PIN is required');
+  }
+  if (normalizedRole !== 'manager' && normalizedRole !== 'staff') {
+    throw new Error('role must be manager or staff');
+  }
+
+  const store = await getStoreById(db, normalizedStoreId);
+  if (!store) {
+    throw new Error('storeId not found');
+  }
+
+  const pinHash = await bcrypt.hash(normalizedPin, 10);
+  const result = await db.run(
+    `INSERT INTO store_staff (store_id, name, pin_hash, role)
+     VALUES (?, ?, ?, ?)`,
+    normalizedStoreId,
+    normalizedName,
+    pinHash,
+    normalizedRole
+  );
+
+  return getStoreStaffById(db, result.lastID);
+}
+
+async function listStoreStaff(db, { storeId, includeInactive = false } = {}) {
+  const normalizedStoreId = requirePositiveInteger(storeId, 'storeId');
+  const activeSql = includeInactive ? '' : 'AND is_active = 1';
+  return db.all(
+    `SELECT id,
+            store_id AS storeId,
+            name,
+            role,
+            is_active AS isActive,
+            created_at AS createdAt
+     FROM store_staff
+     WHERE store_id = ?
+     ${activeSql}
+     ORDER BY id ASC`,
+    normalizedStoreId
+  );
+}
+
+async function updateStoreStaff(db, staffId, fields = {}) {
+  const normalizedStaffId = requirePositiveInteger(staffId, 'staffId');
+  const existing = await getStoreStaffById(db, normalizedStaffId);
+  if (!existing) {
+    throw new Error('staffId not found');
+  }
+
+  const assignments = [];
+  const values = [];
+
+  if (fields.name !== undefined) {
+    const name = String(fields.name || '').trim();
+    if (!name) {
+      throw new Error('Staff name is required');
+    }
+    assignments.push('name = ?');
+    values.push(name);
+  }
+  if (fields.role !== undefined) {
+    const role = String(fields.role || '').trim().toLowerCase();
+    if (role !== 'manager' && role !== 'staff') {
+      throw new Error('role must be manager or staff');
+    }
+    assignments.push('role = ?');
+    values.push(role);
+  }
+  if (fields.isActive !== undefined) {
+    assignments.push('is_active = ?');
+    values.push(fields.isActive ? 1 : 0);
+  }
+  if (fields.pin !== undefined) {
+    const pin = String(fields.pin || '').trim();
+    if (!pin) {
+      throw new Error('PIN is required');
+    }
+    assignments.push('pin_hash = ?');
+    values.push(await bcrypt.hash(pin, 10));
+  }
+
+  if (assignments.length === 0) {
+    return existing;
+  }
+
+  values.push(normalizedStaffId);
+  await db.run(`UPDATE store_staff SET ${assignments.join(', ')} WHERE id = ?`, ...values);
+  return getStoreStaffById(db, normalizedStaffId);
+}
+
+async function deactivateStoreStaff(db, staffId) {
+  const normalizedStaffId = requirePositiveInteger(staffId, 'staffId');
+  const existing = await getStoreStaffById(db, normalizedStaffId);
+  if (!existing) {
+    throw new Error('staffId not found');
+  }
+  await db.run('UPDATE store_staff SET is_active = 0 WHERE id = ?', normalizedStaffId);
+  return getStoreStaffById(db, normalizedStaffId);
+}
+
+async function verifyStoreStaffPin(db, { storeId, staffId, pin }) {
+  const normalizedStoreId = requirePositiveInteger(storeId, 'storeId');
+  const normalizedStaffId = requirePositiveInteger(staffId, 'staffId');
+  const row = await db.get(
+    `SELECT id, pin_hash AS pinHash
+     FROM store_staff
+     WHERE id = ? AND store_id = ? AND is_active = 1`,
+    normalizedStaffId,
+    normalizedStoreId
+  );
+  if (!row) {
+    return false;
+  }
+  return bcrypt.compare(String(pin || ''), row.pinHash);
+}
+
+// Resolve an optional staffId for a store; returns the numeric id if the staff
+// belongs to the store and is active, otherwise throws (caller decides handling).
+async function assertStoreStaff(db, storeId, staffId) {
+  if (staffId == null || staffId === '') {
+    return null;
+  }
+  const normalizedStaffId = requirePositiveInteger(staffId, 'staffId');
+  const row = await db.get(
+    `SELECT id FROM store_staff WHERE id = ? AND store_id = ? AND is_active = 1`,
+    normalizedStaffId,
+    requirePositiveInteger(storeId, 'storeId')
+  );
+  if (!row) {
+    throw new Error('staffId not found');
+  }
+  return normalizedStaffId;
+}
+
+// ─── Feature C: Label template CRUD ──────────────────────────────────────────
+
+async function getLabelTemplateById(db, templateId) {
+  return db.get(
+    `SELECT id,
+            brand_id AS brandId,
+            name,
+            width_mm AS widthMm,
+            height_mm AS heightMm,
+            dpi,
+            body_template AS bodyTemplate,
+            is_default AS isDefault,
+            created_at AS createdAt
+     FROM label_templates
+     WHERE id = ?`,
+    requirePositiveInteger(templateId, 'templateId')
+  );
+}
+
+async function getDefaultLabelTemplate(db, { brandId } = {}) {
+  if (brandId == null) {
+    return undefined;
+  }
+  const normalizedBrandId = requirePositiveInteger(brandId, 'brandId');
+  return db.get(
+    `SELECT id,
+            brand_id AS brandId,
+            name,
+            width_mm AS widthMm,
+            height_mm AS heightMm,
+            dpi,
+            body_template AS bodyTemplate,
+            is_default AS isDefault,
+            created_at AS createdAt
+     FROM label_templates
+     WHERE brand_id = ? AND is_default = 1
+     ORDER BY id DESC
+     LIMIT 1`,
+    normalizedBrandId
+  );
+}
+
+async function createLabelTemplate(db, { brandId, name, widthMm, heightMm, dpi, bodyTemplate, isDefault }) {
+  const normalizedBrandId = requirePositiveInteger(brandId, 'brandId');
+  const normalizedName = String(name || '').trim();
+  if (!normalizedName) {
+    throw new Error('Template name is required');
+  }
+  const brand = await getBrandById(db, normalizedBrandId);
+  if (!brand) {
+    throw new Error('brandId not found');
+  }
+
+  const makeDefault = isDefault ? 1 : 0;
+
+  await db.exec('BEGIN TRANSACTION');
+  try {
+    if (makeDefault) {
+      await db.run('UPDATE label_templates SET is_default = 0 WHERE brand_id = ?', normalizedBrandId);
+    }
+    const result = await db.run(
+      `INSERT INTO label_templates (brand_id, name, width_mm, height_mm, dpi, body_template, is_default)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      normalizedBrandId,
+      normalizedName,
+      widthMm != null ? Number(widthMm) : 60,
+      heightMm != null ? Number(heightMm) : 40,
+      dpi != null ? Number(dpi) : 200,
+      bodyTemplate != null ? String(bodyTemplate) : null,
+      makeDefault
+    );
+    await db.exec('COMMIT');
+    return getLabelTemplateById(db, result.lastID);
+  } catch (error) {
+    await db.exec('ROLLBACK');
+    throw error;
+  }
+}
+
+async function listLabelTemplates(db, { brandId } = {}) {
+  if (brandId != null) {
+    const normalizedBrandId = requirePositiveInteger(brandId, 'brandId');
+    return db.all(
+      `SELECT id,
+              brand_id AS brandId,
+              name,
+              width_mm AS widthMm,
+              height_mm AS heightMm,
+              dpi,
+              body_template AS bodyTemplate,
+              is_default AS isDefault,
+              created_at AS createdAt
+       FROM label_templates
+       WHERE brand_id = ?
+       ORDER BY id ASC`,
+      normalizedBrandId
+    );
+  }
+  return db.all(
+    `SELECT id,
+            brand_id AS brandId,
+            name,
+            width_mm AS widthMm,
+            height_mm AS heightMm,
+            dpi,
+            body_template AS bodyTemplate,
+            is_default AS isDefault,
+            created_at AS createdAt
+     FROM label_templates
+     ORDER BY id ASC`
+  );
+}
+
+const LABEL_TEMPLATE_COLUMN_MAP = {
+  name: 'name',
+  widthMm: 'width_mm',
+  heightMm: 'height_mm',
+  dpi: 'dpi',
+  bodyTemplate: 'body_template'
+};
+
+async function updateLabelTemplate(db, templateId, fields = {}) {
+  const normalizedTemplateId = requirePositiveInteger(templateId, 'templateId');
+  const existing = await getLabelTemplateById(db, normalizedTemplateId);
+  if (!existing) {
+    throw new Error('templateId not found');
+  }
+
+  await db.exec('BEGIN TRANSACTION');
+  try {
+    const assignments = [];
+    const values = [];
+    for (const [key, rawValue] of Object.entries(fields)) {
+      const column = LABEL_TEMPLATE_COLUMN_MAP[key];
+      if (!column || rawValue === undefined) {
+        continue;
+      }
+      let value = rawValue;
+      if (key === 'name') {
+        value = String(rawValue || '').trim();
+        if (!value) {
+          throw new Error('Template name is required');
+        }
+      } else if (key === 'widthMm' || key === 'heightMm' || key === 'dpi') {
+        value = Number(rawValue);
+      } else if (key === 'bodyTemplate') {
+        value = rawValue != null ? String(rawValue) : null;
+      }
+      assignments.push(`${column} = ?`);
+      values.push(value);
+    }
+
+    if (fields.isDefault !== undefined) {
+      if (fields.isDefault) {
+        await db.run('UPDATE label_templates SET is_default = 0 WHERE brand_id = ?', existing.brandId);
+        assignments.push('is_default = ?');
+        values.push(1);
+      } else {
+        assignments.push('is_default = ?');
+        values.push(0);
+      }
+    }
+
+    if (assignments.length > 0) {
+      values.push(normalizedTemplateId);
+      await db.run(`UPDATE label_templates SET ${assignments.join(', ')} WHERE id = ?`, ...values);
+    }
+    await db.exec('COMMIT');
+    return getLabelTemplateById(db, normalizedTemplateId);
+  } catch (error) {
+    await db.exec('ROLLBACK');
+    throw error;
+  }
+}
+
+async function deleteLabelTemplate(db, templateId) {
+  const normalizedTemplateId = requirePositiveInteger(templateId, 'templateId');
+  const existing = await getLabelTemplateById(db, normalizedTemplateId);
+  if (!existing) {
+    throw new Error('templateId not found');
+  }
+  await db.run('DELETE FROM label_templates WHERE id = ?', normalizedTemplateId);
+  return existing;
+}
+
+// Build the flat placeholder field map for a label object.
+function buildLabelTemplateFields(label) {
+  return {
+    product_name: label.productName,
+    expires_at: label.expiresAt,
+    printed_at: label.printedAt,
+    batch_id: label.batchId,
+    store_name: label.storeName,
+    barcode: label.barcodeData,
+    allergens: label.allergens,
+    storage: label.storageConditions,
+    opened: label.opened ? 'OPENED' : ''
+  };
+}
+
+// ─── Feature B: Dashboard aggregation (read-only, brand-scoped) ──────────────
+
+function brandScopeClause(brandId, alias, params) {
+  if (brandId == null) {
+    return '';
+  }
+  params.push(requirePositiveInteger(brandId, 'brandId'));
+  return `AND ${alias}.brand_id = ?`;
+}
+
+async function getDashboardSummary(db, { brandId } = {}) {
+  const storeParams = [];
+  const storeScope = brandScopeClause(brandId, 's', storeParams);
+
+  const brandCountRow = brandId == null
+    ? await db.get('SELECT COUNT(*) AS c FROM brands')
+    : { c: (await getBrandById(db, brandId)) ? 1 : 0 };
+
+  const storeRow = await db.get(
+    `SELECT COUNT(*) AS c FROM stores s WHERE 1=1 ${storeScope}`,
+    ...storeParams
+  );
+
+  const productParams = [];
+  const productScope = brandScopeClause(brandId, 'p', productParams);
+  const productRow = await db.get(
+    `SELECT COUNT(*) AS c FROM products p WHERE 1=1 ${productScope}`,
+    ...productParams
+  );
+
+  const expParams = [];
+  const expScope = brandScopeClause(brandId, 's', expParams);
+  const todayRow = await db.get(
+    `SELECT COUNT(*) AS c
+     FROM reminders r
+     JOIN stores s ON s.id = r.store_id
+     WHERE r.handled_at IS NULL
+       AND datetime(r.expires_at) >= datetime('now')
+       AND datetime(r.expires_at) <= datetime('now', '+1 day')
+       ${expScope}`,
+    ...expParams
+  );
+
+  const unhandledParams = [];
+  const unhandledScope = brandScopeClause(brandId, 's', unhandledParams);
+  const unhandledRow = await db.get(
+    `SELECT COUNT(*) AS c
+     FROM reminders r
+     JOIN stores s ON s.id = r.store_id
+     WHERE r.handled_at IS NULL
+       AND datetime(r.expires_at) < datetime('now')
+       ${unhandledScope}`,
+    ...unhandledParams
+  );
+
+  const rateParams = [];
+  const rateScope = brandScopeClause(brandId, 's', rateParams);
+  const rateRow = await db.get(
+    `SELECT
+        SUM(CASE WHEN datetime(r.expires_at) < datetime('now') THEN 1 ELSE 0 END) AS total,
+        SUM(CASE WHEN datetime(r.expires_at) < datetime('now') AND r.handled_at IS NOT NULL THEN 1 ELSE 0 END) AS handled
+     FROM reminders r
+     JOIN stores s ON s.id = r.store_id
+     WHERE datetime(r.expires_at) >= datetime('now', '-30 day')
+       ${rateScope}`,
+    ...rateParams
+  );
+
+  const total = Number(rateRow?.total || 0);
+  const handled = Number(rateRow?.handled || 0);
+  const handledRate = total > 0 ? handled / total : 0;
+
+  return {
+    brands: Number(brandCountRow?.c || 0),
+    stores: Number(storeRow?.c || 0),
+    products: Number(productRow?.c || 0),
+    todayExpiringCount: Number(todayRow?.c || 0),
+    unhandledExpiredCount: Number(unhandledRow?.c || 0),
+    handledRate
+  };
+}
+
+async function getStoreExpiryRanking(db, { brandId, limit = 10 } = {}) {
+  const params = [];
+  const scope = brandScopeClause(brandId, 's', params);
+  const normalizedLimit = Number.isInteger(Number(limit)) && Number(limit) > 0 ? Number(limit) : 10;
+  params.push(normalizedLimit);
+  return db.all(
+    `SELECT s.id AS storeId,
+            s.name AS storeName,
+            COUNT(r.id) AS count
+     FROM stores s
+     LEFT JOIN reminders r ON r.store_id = s.id
+       AND r.handled_at IS NULL
+       AND datetime(r.expires_at) <= datetime('now', '+1 day')
+     WHERE 1=1 ${scope}
+     GROUP BY s.id
+     ORDER BY count DESC, s.id ASC
+     LIMIT ?`,
+    ...params
+  );
+}
+
+async function getLossTrend(db, { brandId, days = 30 } = {}) {
+  const normalizedDays = Number.isInteger(Number(days)) && Number(days) > 0 ? Number(days) : 30;
+  const params = [];
+  const scope = brandScopeClause(brandId, 's', params);
+  params.push(`-${normalizedDays} day`);
+  return db.all(
+    `SELECT date(r.expires_at) AS date,
+            SUM(CASE WHEN datetime(r.expires_at) < datetime('now') THEN 1 ELSE 0 END) AS expired,
+            SUM(CASE WHEN datetime(r.expires_at) < datetime('now') AND r.handled_at IS NOT NULL THEN 1 ELSE 0 END) AS handled
+     FROM reminders r
+     JOIN stores s ON s.id = r.store_id
+     WHERE 1=1 ${scope}
+       AND datetime(r.expires_at) >= datetime('now', ?)
+     GROUP BY date(r.expires_at)
+     ORDER BY date(r.expires_at) ASC`,
+    ...params
+  );
+}
+
+async function getInspectionScoreTrend(db, { brandId, days = 30 } = {}) {
+  const normalizedDays = Number.isInteger(Number(days)) && Number(days) > 0 ? Number(days) : 30;
+  const params = [];
+  const scope = brandScopeClause(brandId, 's', params);
+  params.push(`-${normalizedDays} day`);
+  return db.all(
+    `SELECT date(COALESCE(i.completed_at, i.created_at)) AS date,
+            AVG(
+              CASE
+                WHEN i.score_pct IS NOT NULL THEN i.score_pct
+                WHEN i.max_score > 0 THEN (i.total_score * 100.0 / i.max_score)
+                ELSE NULL
+              END
+            ) AS avgScore,
+            COUNT(*) AS count
+     FROM inspections i
+     JOIN stores s ON s.id = i.store_id
+     WHERE 1=1 ${scope}
+       AND datetime(COALESCE(i.completed_at, i.created_at)) >= datetime('now', ?)
+     GROUP BY date(COALESCE(i.completed_at, i.created_at))
+     ORDER BY date(COALESCE(i.completed_at, i.created_at)) ASC`,
+    ...params
+  );
 }
 
 function recordAudit(db, { actorType, actorId, action, targetType, targetId, detail, ip }) {
@@ -1315,12 +1897,23 @@ module.exports = {
   createBindingCode,
   createBrand,
   createDb,
+  createLabelTemplate,
   createProduct,
   createStore,
+  createStoreStaff,
+  deactivateStoreStaff,
+  deleteLabelTemplate,
   deleteProduct,
   ensureAdminUser,
+  getDashboardSummary,
+  getDefaultLabelTemplate,
+  getInspectionScoreTrend,
+  getLabelTemplateById,
+  getLossTrend,
   getProductById,
   getStoreById,
+  getStoreExpiryRanking,
+  getStoreStaffById,
   getUserByEmail,
   handleReminder,
   listAdminUsers,
@@ -1328,12 +1921,19 @@ module.exports = {
   listBindingCodes,
   listBrands,
   listExpiredHandlingReport,
+  listLabelTemplates,
   listProducts,
   listStores,
   listStoreProducts,
   listStoreReminders,
+  listStoreStaff,
   openReminder,
   recordAudit,
+  renderLabelFromTemplate,
+  renderLabelTemplate,
+  updateLabelTemplate,
   updateProduct,
-  updateStorePrinterSettings
+  updateStoreStaff,
+  updateStorePrinterSettings,
+  verifyStoreStaffPin
 };

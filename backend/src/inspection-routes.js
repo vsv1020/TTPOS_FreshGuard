@@ -12,6 +12,7 @@ const {
   createSelfCheck, submitSelfCheckResults,
   getInspectionScorecard, getStoreScoreHistory,
 } = require('./inspection-db');
+const { recordAudit } = require('./db');
 
 function respondError(res, error) {
   const msg = String(error?.message || 'Request failed');
@@ -114,13 +115,6 @@ function buildInspectionRoutes({ db, adminAuth, storeAuth }) {
     } catch (e) { respondError(res, e); }
   });
 
-  router.get('/admin/inspection/:id', adminAuth, async (req, res) => {
-    try {
-      const inspection = await getInspection(db, req.params.id);
-      res.json({ inspection });
-    } catch (e) { respondError(res, e); }
-  });
-
   // ─── Admin: Issues ──────────────────────────────────────
 
   router.get('/admin/inspection/issues', adminAuth, async (req, res) => {
@@ -157,6 +151,14 @@ function buildInspectionRoutes({ db, adminAuth, storeAuth }) {
     } catch (e) { respondError(res, e); }
   });
 
+  // static admin routes above; wildcard :id below
+  router.get('/admin/inspection/:id', adminAuth, async (req, res) => {
+    try {
+      const inspection = await getInspection(db, req.params.id);
+      res.json({ inspection });
+    } catch (e) { respondError(res, e); }
+  });
+
   // ─── Store: Execute Inspection ──────────────────────────
 
   router.get('/store/inspection/templates', storeAuth, async (req, res) => {
@@ -171,6 +173,9 @@ function buildInspectionRoutes({ db, adminAuth, storeAuth }) {
   router.get('/store/inspection/templates/:id', storeAuth, async (req, res) => {
     try {
       const template = await getTemplate(db, req.params.id);
+      if (template.brand_id !== req.storeAuth.brandId) {
+        return res.status(403).json({ error: 'Forbidden' });
+      }
       res.json({ template });
     } catch (e) { respondError(res, e); }
   });
@@ -189,10 +194,23 @@ function buildInspectionRoutes({ db, adminAuth, storeAuth }) {
 
   router.post('/store/inspection/:id/submit', storeAuth, async (req, res) => {
     try {
+      const existing = await getInspection(db, req.params.id);
+      if (existing.store_id !== req.storeAuth.storeId) {
+        return res.status(403).json({ error: 'Forbidden' });
+      }
       const inspection = await submitInspectionResults(db, {
         inspectionId: req.params.id,
         results: req.body?.results || [],
       });
+      recordAudit(db, {
+        actorType: 'store',
+        actorId: req.storeAuth.storeId,
+        action: 'inspection.submit',
+        targetType: 'inspection',
+        targetId: req.params.id,
+        detail: null,
+        ip: req.ip || null,
+      }).catch(() => {});
       res.json({ inspection });
     } catch (e) { respondError(res, e); }
   });
@@ -213,9 +231,9 @@ function buildInspectionRoutes({ db, adminAuth, storeAuth }) {
   router.post('/store/inspection/self-check/start', storeAuth, async (req, res) => {
     try {
       const result = await createSelfCheck(db, {
-        storeId: req.body?.storeId || req.storeId,
+        storeId: req.storeAuth.storeId,
         templateId: req.body?.templateId,
-        submittedBy: req.body?.submittedBy || 'store',
+        submittedBy: req.storeAuth.storeId,
       });
       res.status(201).json(result);
     } catch (e) { respondError(res, e); }
@@ -223,11 +241,24 @@ function buildInspectionRoutes({ db, adminAuth, storeAuth }) {
 
   router.post('/store/inspection/self-check/:id/submit', storeAuth, async (req, res) => {
     try {
+      const existing = await getInspection(db, req.params.id);
+      if (existing.store_id !== req.storeAuth.storeId) {
+        return res.status(403).json({ error: 'Forbidden' });
+      }
       const result = await submitSelfCheckResults(db, {
         inspectionId: req.params.id,
         results: req.body?.results || [],
         photos: req.body?.photos || [],
       });
+      recordAudit(db, {
+        actorType: 'store',
+        actorId: req.storeAuth.storeId,
+        action: 'inspection.self_check.submit',
+        targetType: 'inspection',
+        targetId: req.params.id,
+        detail: null,
+        ip: req.ip || null,
+      }).catch(() => {});
       res.json(result);
     } catch (e) { respondError(res, e); }
   });
@@ -241,17 +272,20 @@ function buildInspectionRoutes({ db, adminAuth, storeAuth }) {
     } catch (e) { respondError(res, e); }
   });
 
-  router.get('/store/inspection/:id/scorecard', storeAuth, async (req, res) => {
+  router.get('/store/inspection/scores/history', storeAuth, async (req, res) => {
     try {
-      const scorecard = await getInspectionScorecard(db, req.params.id);
-      res.json(scorecard);
+      const history = await getStoreScoreHistory(db, req.storeAuth.storeId, parseInt(req.query.limit) || 10);
+      res.json({ history });
     } catch (e) { respondError(res, e); }
   });
 
-  router.get('/store/inspection/scores/history', storeAuth, async (req, res) => {
+  router.get('/store/inspection/:id/scorecard', storeAuth, async (req, res) => {
     try {
-      const history = await getStoreScoreHistory(db, req.query.storeId || req.storeId, parseInt(req.query.limit) || 10);
-      res.json({ history });
+      const scorecard = await getInspectionScorecard(db, req.params.id);
+      if (scorecard.store_id !== req.storeAuth.storeId) {
+        return res.status(403).json({ error: 'Forbidden' });
+      }
+      res.json(scorecard);
     } catch (e) { respondError(res, e); }
   });
 

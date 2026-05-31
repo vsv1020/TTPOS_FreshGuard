@@ -34,15 +34,20 @@ CREATE TABLE IF NOT EXISTS inspections (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   template_id INTEGER NOT NULL,
   store_id INTEGER NOT NULL,
-  inspector_id INTEGER NOT NULL,
-  status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'submitted', 'reviewed')),
+  inspector_id INTEGER,
+  status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'in_progress', 'submitted', 'reviewed', 'completed')),
+  type TEXT DEFAULT 'inspection',
+  max_score INTEGER DEFAULT 0,
+  grade TEXT,
+  score_pct REAL,
+  completed_at TEXT,
   total_score INTEGER DEFAULT 0,
   remarks TEXT,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (template_id) REFERENCES inspection_templates(id) ON DELETE CASCADE,
   FOREIGN KEY (store_id) REFERENCES stores(id) ON DELETE CASCADE,
-  FOREIGN KEY (inspector_id) REFERENCES users(id) ON DELETE CASCADE
+  FOREIGN KEY (inspector_id) REFERENCES users(id) ON DELETE SET NULL
 );
 
 CREATE TABLE IF NOT EXISTS inspection_results (
@@ -53,6 +58,7 @@ CREATE TABLE IF NOT EXISTS inspection_results (
   value TEXT,
   photo_url TEXT,
   note TEXT,
+  max_score_snapshot INTEGER,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (inspection_id) REFERENCES inspections(id) ON DELETE CASCADE,
   FOREIGN KEY (check_item_id) REFERENCES check_items(id) ON DELETE CASCADE
@@ -80,6 +86,72 @@ CREATE TABLE IF NOT EXISTS issues (
 
 async function initInspectionSchema(db) {
   await db.exec(INSPECTION_SCHEMA);
+
+  // Idempotent migrations for existing databases that were created before schema updates.
+  // PRAGMA table_info returns rows: {cid, name, type, notnull, dflt_value, pk}
+  const inspCols = await db.all('PRAGMA table_info(inspections)');
+  const inspColNames = new Set(inspCols.map(c => c.name));
+
+  if (!inspColNames.has('type')) {
+    await db.run("ALTER TABLE inspections ADD COLUMN type TEXT DEFAULT 'inspection'");
+  }
+  if (!inspColNames.has('max_score')) {
+    await db.run('ALTER TABLE inspections ADD COLUMN max_score INTEGER DEFAULT 0');
+  }
+  if (!inspColNames.has('grade')) {
+    await db.run('ALTER TABLE inspections ADD COLUMN grade TEXT');
+  }
+  if (!inspColNames.has('score_pct')) {
+    await db.run('ALTER TABLE inspections ADD COLUMN score_pct REAL');
+  }
+  if (!inspColNames.has('completed_at')) {
+    await db.run('ALTER TABLE inspections ADD COLUMN completed_at TEXT');
+  }
+
+  // Migration: if inspector_id is NOT NULL (old schema), recreate inspections table
+  // to make it nullable so self-check records (with no linked user) can be inserted.
+  // Use explicit column list so the copy works regardless of which optional columns
+  // exist in the old table (they all have defaults in the new table).
+  const inspectorCol = inspCols.find(c => c.name === 'inspector_id');
+  if (inspectorCol && inspectorCol.notnull === 1) {
+    // Build the list of columns that exist in the OLD table (to copy only those).
+    const oldColNames = inspCols.map(c => c.name).join(', ');
+    await db.exec('PRAGMA foreign_keys = OFF');
+    await db.exec('BEGIN TRANSACTION');
+    await db.exec('ALTER TABLE inspections RENAME TO _inspections_old');
+    await db.exec(`
+      CREATE TABLE inspections (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        template_id INTEGER NOT NULL,
+        store_id INTEGER NOT NULL,
+        inspector_id INTEGER,
+        status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'in_progress', 'submitted', 'reviewed', 'completed')),
+        type TEXT DEFAULT 'inspection',
+        max_score INTEGER DEFAULT 0,
+        grade TEXT,
+        score_pct REAL,
+        completed_at TEXT,
+        total_score INTEGER DEFAULT 0,
+        remarks TEXT,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (template_id) REFERENCES inspection_templates(id) ON DELETE CASCADE,
+        FOREIGN KEY (store_id) REFERENCES stores(id) ON DELETE CASCADE,
+        FOREIGN KEY (inspector_id) REFERENCES users(id) ON DELETE SET NULL
+      )
+    `);
+    await db.exec(`INSERT INTO inspections (${oldColNames}) SELECT ${oldColNames} FROM _inspections_old`);
+    await db.exec('DROP TABLE _inspections_old');
+    await db.exec('COMMIT');
+    await db.exec('PRAGMA foreign_keys = ON');
+  }
+
+  const resCols = await db.all('PRAGMA table_info(inspection_results)');
+  const resColNames = new Set(resCols.map(c => c.name));
+
+  if (!resColNames.has('max_score_snapshot')) {
+    await db.run('ALTER TABLE inspection_results ADD COLUMN max_score_snapshot INTEGER');
+  }
 }
 
 // ─── Templates ───────────────────────────────────────────
@@ -166,6 +238,17 @@ async function deleteCheckItem(db, id) {
   if (result.changes === 0) throw new Error('Check item not found');
 }
 
+// ─── Issue severity helper ────────────────────────────────
+
+// Returns severity string if score is below threshold, null otherwise.
+function _isssueSeverity(score, maxScore) {
+  if (maxScore <= 0) return null;
+  if (score === 0) return 'critical';
+  if (score < maxScore * 0.4) return 'high';
+  if (score < maxScore * 0.6) return 'medium';
+  return null;
+}
+
 // ─── Inspections ─────────────────────────────────────────
 
 async function createInspection(db, { templateId, storeId, inspectorId, remarks }) {
@@ -185,20 +268,66 @@ async function submitInspectionResults(db, { inspectionId, results }) {
     throw new Error('inspectionId and results array are required');
   }
 
-  let totalScore = 0;
-  for (const r of results) {
-    await db.run(
-      `INSERT INTO inspection_results (inspection_id, check_item_id, score, value, photo_url, note)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-      [inspectionId, r.checkItemId, r.score || 0, r.value || null, r.photoUrl || null, r.note || null]
-    );
-    totalScore += r.score || 0;
+  // Guard against double-submission before opening transaction.
+  const current = await db.get('SELECT status, store_id FROM inspections WHERE id = ?', [inspectionId]);
+  if (!current) throw new Error('Inspection not found');
+  if (current.status === 'submitted' || current.status === 'completed') {
+    throw new Error('Inspection already submitted');
   }
 
-  await db.run(
-    `UPDATE inspections SET status = 'submitted', total_score = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
-    [totalScore, inspectionId]
-  );
+  // Collect per-item scores for issue generation (after commit).
+  const itemSnapshots = [];
+
+  await db.exec('BEGIN TRANSACTION');
+  try {
+    let totalScore = 0;
+    let totalMaxScore = 0;
+
+    for (const r of results) {
+      // Fetch max_score and name for this check item to clamp and snapshot.
+      const item = await db.get('SELECT max_score, name FROM check_items WHERE id = ?', [r.checkItemId]);
+      const itemMaxScore = item ? item.max_score : 0;
+      const itemName = item ? item.name : String(r.checkItemId);
+      // Clamp submitted score to [0, itemMaxScore].
+      const clampedScore = Math.min(Math.max(r.score || 0, 0), itemMaxScore);
+
+      await db.run(
+        `INSERT INTO inspection_results
+           (inspection_id, check_item_id, score, value, photo_url, note, max_score_snapshot)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [inspectionId, r.checkItemId, clampedScore, r.value || null, r.photoUrl || null, r.note || null, itemMaxScore]
+      );
+      totalScore += clampedScore;
+      totalMaxScore += itemMaxScore;
+      itemSnapshots.push({ name: itemName, score: clampedScore, maxScore: itemMaxScore });
+    }
+
+    await db.run(
+      `UPDATE inspections
+       SET status = 'submitted', total_score = ?, max_score = ?, updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`,
+      [totalScore, totalMaxScore, inspectionId]
+    );
+
+    await db.exec('COMMIT');
+  } catch (error) {
+    await db.exec('ROLLBACK');
+    throw error;
+  }
+
+  // Auto-generate issues for low-score items (after transaction committed).
+  const storeId = current.store_id;
+  for (const snap of itemSnapshots) {
+    const severity = _isssueSeverity(snap.score, snap.maxScore);
+    if (!severity) continue;
+    await createIssue(db, {
+      inspectionId,
+      storeId,
+      title: `Low score: ${snap.name}`,
+      description: `Score ${snap.score}/${snap.maxScore} on inspection #${inspectionId}`,
+      severity,
+    }).catch(() => {}); // non-fatal
+  }
 
   return db.get('SELECT * FROM inspections WHERE id = ?', [inspectionId]);
 }
@@ -285,14 +414,15 @@ async function listIssues(db, { storeId, status, severity, limit = 50 } = {}) {
 
 // ─── Week 2: Self-Check Module ───────────────────────────
 
-async function createSelfCheck(db, { storeId, templateId, submittedBy }) {
+async function createSelfCheck(db, { storeId, templateId }) {
   if (!storeId || !templateId) throw new Error('storeId and templateId required');
-  const id = `sc_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-  await db.run(
-    `INSERT INTO inspections (id, template_id, store_id, inspector_id, type, status, created_at)
-     VALUES (?, ?, ?, ?, 'self_check', 'in_progress', datetime('now'))`,
-    [id, templateId, storeId, submittedBy || 'store']
+  // inspector_id is NULL for store-initiated self-checks (no linked admin user).
+  const result = await db.run(
+    `INSERT INTO inspections (template_id, store_id, inspector_id, type, status, created_at)
+     VALUES (?, ?, NULL, 'self_check', 'in_progress', datetime('now'))`,
+    [templateId, storeId]
   );
+  const id = result.lastID;
   return { id, templateId, storeId, type: 'self_check', status: 'in_progress' };
 }
 
@@ -303,16 +433,25 @@ async function submitSelfCheckResults(db, { inspectionId, results, photos }) {
 
   let totalScore = 0;
   let maxScore = 0;
+  const itemSnapshots = [];
 
   for (const r of results) {
+    const item = await db.get('SELECT max_score, name FROM check_items WHERE id = ?', [r.checkItemId]);
+    const itemMaxScore = item ? item.max_score : 0;
+    const itemName = item ? item.name : String(r.checkItemId);
+    // Clamp score to [0, itemMaxScore].
+    const clampedScore = Math.min(Math.max(r.score || 0, 0), itemMaxScore);
+
+    // Use AUTOINCREMENT — no manual id.
     await db.run(
-      `INSERT OR REPLACE INTO inspection_results (id, inspection_id, check_item_id, score, note, photo_url)
+      `INSERT OR REPLACE INTO inspection_results
+         (inspection_id, check_item_id, score, note, photo_url, max_score_snapshot)
        VALUES (?, ?, ?, ?, ?, ?)`,
-      [`r_${inspectionId}_${r.checkItemId}`, inspectionId, r.checkItemId, r.score || 0, r.note || '', r.photoUrl || '']
+      [inspectionId, r.checkItemId, clampedScore, r.note || '', r.photoUrl || '', itemMaxScore]
     );
-    totalScore += (r.score || 0);
-    const item = await db.get('SELECT max_score FROM check_items WHERE id = ?', [r.checkItemId]);
-    if (item) maxScore += item.max_score;
+    totalScore += clampedScore;
+    maxScore += itemMaxScore;
+    itemSnapshots.push({ name: itemName, score: clampedScore, maxScore: itemMaxScore });
   }
 
   // Calculate grade
@@ -324,6 +463,20 @@ async function submitSelfCheckResults(db, { inspectionId, results, photos }) {
      score_pct = ?, completed_at = datetime('now') WHERE id = ?`,
     [totalScore, maxScore, grade, Math.round(pct * 10) / 10, inspectionId]
   );
+
+  // Auto-generate issues for low-score items (after update committed).
+  const storeId = insp.store_id;
+  for (const snap of itemSnapshots) {
+    const severity = _isssueSeverity(snap.score, snap.maxScore);
+    if (!severity) continue;
+    await createIssue(db, {
+      inspectionId,
+      storeId,
+      title: `Low score: ${snap.name}`,
+      description: `Score ${snap.score}/${snap.maxScore} on self-check #${inspectionId}`,
+      severity,
+    }).catch(() => {}); // non-fatal
+  }
 
   return { inspectionId, totalScore, maxScore, pct: Math.round(pct * 10) / 10, grade };
 }
@@ -359,9 +512,10 @@ async function getInspectionScorecard(db, inspectionId) {
     results,
     summary: {
       total: results.length,
-      passed: results.filter(r => r.score >= (r.max_score * 0.6)).length,
-      failed: results.filter(r => r.score < (r.max_score * 0.6)).length,
-      critical: results.filter(r => r.score === 0 && r.max_score > 0).length,
+      // Use max_score_snapshot when available (survives check_item deletion); fall back to ci.max_score.
+      passed: results.filter(r => r.score >= ((r.max_score_snapshot != null ? r.max_score_snapshot : r.max_score) * 0.6)).length,
+      failed: results.filter(r => r.score < ((r.max_score_snapshot != null ? r.max_score_snapshot : r.max_score) * 0.6)).length,
+      critical: results.filter(r => r.score === 0 && (r.max_score_snapshot != null ? r.max_score_snapshot : r.max_score) > 0).length,
     }
   };
 }

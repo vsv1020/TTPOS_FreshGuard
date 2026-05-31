@@ -11,6 +11,26 @@ const DB_FILE = process.env.DB_FILE || path.join(__dirname, '..', 'data', 'fresh
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'admin@freshguard.local';
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'Admin123!ChangeMe';
 
+const UNSAFE_JWT_SECRET = 'change-me-in-env';
+const DEFAULT_ADMIN_PASSWORD = 'Admin123!ChangeMe';
+
+// eslint-disable-next-line no-console
+if (!process.env.JWT_SECRET || process.env.JWT_SECRET === UNSAFE_JWT_SECRET) {
+  if (process.env.NODE_ENV === 'production') {
+    // eslint-disable-next-line no-console
+    console.error('FATAL: JWT_SECRET is not set or is using the insecure default. Set a strong JWT_SECRET before running in production.');
+    process.exit(1);
+  } else {
+    // eslint-disable-next-line no-console
+    console.warn('WARNING: JWT_SECRET is not set or is using the insecure default. Change it before deploying to production.');
+  }
+}
+
+if (process.env.ADMIN_PASSWORD === DEFAULT_ADMIN_PASSWORD) {
+  // eslint-disable-next-line no-console
+  console.warn('WARNING: ADMIN_PASSWORD is using the insecure default. Change it before deploying to production.');
+}
+
 async function start() {
   fs.mkdirSync(path.dirname(DB_FILE), { recursive: true });
   const db = await createDb(DB_FILE);

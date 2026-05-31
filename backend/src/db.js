@@ -107,6 +107,18 @@ CREATE TABLE IF NOT EXISTS handling_logs (
   FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS audit_logs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  actor_type TEXT,
+  actor_id TEXT,
+  action TEXT,
+  target_type TEXT,
+  target_id TEXT,
+  detail TEXT,
+  ip TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE INDEX IF NOT EXISTS idx_stores_brand ON stores(brand_id);
 CREATE INDEX IF NOT EXISTS idx_products_brand ON products(brand_id);
 CREATE INDEX IF NOT EXISTS idx_binding_codes_store ON binding_codes(store_id);
@@ -154,25 +166,54 @@ function renderLabelTemplate({
   printedAt,
   expiresAt,
   storeName,
-  languages
+  languages,
+  allergens,
+  storageConditions,
+  barcodeData,
+  opened
 }) {
-  const headerLines = [
-    `Template: ${template}`,
-    `Store: ${storeName}`,
-    `Product: ${productName}`,
-    `Batch ID: ${batchId}`,
-    `Printed At: ${printedAt}`,
-    `Expires At: ${expiresAt}`,
-    `Languages: ${languages.join(', ')}`
-  ];
+  // Clear multi-line label layout closer to a real printed shelf-life label.
+  // The leading keyed lines (Store / Product / Batch ID / Languages) are kept
+  // verbatim so existing label consumers and tests continue to match.
+  const lines = [];
 
-  if (template === LABEL_LANGUAGE_BILINGUAL) {
-    return `${headerLines.join('\n')}\nPrimary Name [${languages[0]}]: ${productName}\nSecondary Name [${
-      languages[1] || ''
-    }]: ${productName}`;
+  lines.push('=== FreshGuard Label ===');
+  if (opened) {
+    lines.push('** OPENED / 已开封 **');
+  }
+  lines.push(`Store: ${storeName}`);
+  lines.push(`Product: ${productName}`);
+  lines.push(`Batch ID: ${batchId}`);
+  lines.push(`Template: ${template}`);
+  lines.push(`Languages: ${languages.join(', ')}`);
+  lines.push('------------------------');
+  lines.push(`Printed At: ${printedAt}`);
+  lines.push(`Expires At: ${expiresAt}`);
+
+  const allergensText = String(allergens || '').trim();
+  if (allergensText) {
+    lines.push(`过敏原: ${allergensText}`);
+  }
+  const storageText = String(storageConditions || '').trim();
+  if (storageText) {
+    lines.push(`存储: ${storageText}`);
   }
 
-  return `${headerLines.join('\n')}\nName [${languages[0] || 'en'}]: ${productName}`;
+  lines.push('------------------------');
+  if (template === LABEL_LANGUAGE_BILINGUAL) {
+    lines.push(`Primary Name [${languages[0]}]: ${productName}`);
+    lines.push(`Secondary Name [${languages[1] || ''}]: ${productName}`);
+  } else {
+    lines.push(`Name [${languages[0] || 'en'}]: ${productName}`);
+  }
+
+  const barcodeText = String(barcodeData || '').trim();
+  if (barcodeText) {
+    lines.push('------------------------');
+    lines.push(`Barcode: ${barcodeText}`);
+  }
+
+  return lines.join('\n');
 }
 
 function getStorePrinterSettings(store) {
@@ -194,6 +235,41 @@ async function createDb(filename) {
   const db = await open({ filename, driver: sqlite3.Database });
   await db.exec('PRAGMA foreign_keys = ON;');
   await db.exec(SCHEMA_SQL);
+
+  // Idempotent migration: add brand_id to users if it doesn't exist yet
+  const userColumns = await db.all("PRAGMA table_info(users)");
+  const hasBrandId = userColumns.some((col) => col.name === 'brand_id');
+  if (!hasBrandId) {
+    await db.exec('ALTER TABLE users ADD COLUMN brand_id INTEGER REFERENCES brands(id) ON DELETE SET NULL');
+  }
+
+  // Idempotent migration: add new product columns for existing databases.
+  // PRAGMA table_info returns rows: {cid, name, type, notnull, dflt_value, pk}
+  const productColumns = await db.all('PRAGMA table_info(products)');
+  const productColNames = new Set(productColumns.map((col) => col.name));
+  if (!productColNames.has('is_active')) {
+    await db.exec('ALTER TABLE products ADD COLUMN is_active INTEGER DEFAULT 1');
+  }
+  if (!productColNames.has('allergens')) {
+    await db.exec('ALTER TABLE products ADD COLUMN allergens TEXT');
+  }
+  if (!productColNames.has('storage_conditions')) {
+    await db.exec('ALTER TABLE products ADD COLUMN storage_conditions TEXT');
+  }
+  if (!productColNames.has('opened_shelf_life_hours')) {
+    await db.exec('ALTER TABLE products ADD COLUMN opened_shelf_life_hours INTEGER');
+  }
+
+  // Idempotent migration: add barcode_data and note to batches/reminders for traceability + PAO.
+  const batchColumns = await db.all('PRAGMA table_info(batches)');
+  if (!batchColumns.some((col) => col.name === 'barcode_data')) {
+    await db.exec('ALTER TABLE batches ADD COLUMN barcode_data TEXT');
+  }
+  const reminderColumns = await db.all('PRAGMA table_info(reminders)');
+  if (!reminderColumns.some((col) => col.name === 'note')) {
+    await db.exec('ALTER TABLE reminders ADD COLUMN note TEXT');
+  }
+
   return db;
 }
 
@@ -294,7 +370,30 @@ async function getStoreById(db, storeId) {
   );
 }
 
-async function listStores(db) {
+async function listStores(db, { brandId } = {}) {
+  if (brandId != null) {
+    const normalizedBrandId = requirePositiveInteger(brandId, 'brandId');
+    return db.all(
+      `SELECT s.id,
+              s.brand_id AS brandId,
+              b.name AS brandName,
+              s.name,
+              s.printer_name AS printerName,
+              s.printer_model AS printerModel,
+              s.printer_address AS printerAddress,
+              s.printer_port AS printerPort,
+              s.printer_dpi AS printerDpi,
+              s.label_width_mm AS labelWidthMm,
+              s.created_at AS createdAt,
+              s.updated_at AS updatedAt
+       FROM stores s
+       JOIN brands b ON b.id = s.brand_id
+       WHERE s.brand_id = ?
+       ORDER BY s.id ASC`,
+      normalizedBrandId
+    );
+  }
+
   return db.all(
     `SELECT s.id,
             s.brand_id AS brandId,
@@ -431,7 +530,29 @@ async function createBindingCode(db, { storeId, code, expiresInHours = 24 }) {
   return getBindingCodeByCode(db, bindingCode);
 }
 
-async function listBindingCodes(db) {
+async function listBindingCodes(db, { brandId } = {}) {
+  if (brandId != null) {
+    const normalizedBrandId = requirePositiveInteger(brandId, 'brandId');
+    return db.all(
+      `SELECT bc.id,
+              bc.brand_id AS brandId,
+              b.name AS brandName,
+              bc.store_id AS storeId,
+              s.name AS storeName,
+              bc.code,
+              bc.expires_at AS expiresAt,
+              bc.used_at AS usedAt,
+              bc.bound_device_id AS boundDeviceId,
+              bc.created_at AS createdAt
+       FROM binding_codes bc
+       JOIN stores s ON s.id = bc.store_id
+       JOIN brands b ON b.id = bc.brand_id
+       WHERE bc.brand_id = ?
+       ORDER BY bc.id DESC`,
+      normalizedBrandId
+    );
+  }
+
   return db.all(
     `SELECT bc.id,
             bc.brand_id AS brandId,
@@ -508,6 +629,10 @@ async function getProductById(db, productId) {
             p.label_language AS labelLanguage,
             p.primary_language AS primaryLanguage,
             p.secondary_language AS secondaryLanguage,
+            p.allergens,
+            p.storage_conditions AS storageConditions,
+            p.opened_shelf_life_hours AS openedShelfLifeHours,
+            p.is_active AS isActive,
             p.created_at AS createdAt,
             p.updated_at AS updatedAt
      FROM products p
@@ -517,9 +642,31 @@ async function getProductById(db, productId) {
   );
 }
 
+function normalizeOpenedShelfLifeHours(value) {
+  if (value == null || value === '') {
+    return null;
+  }
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error('openedShelfLifeHours must be a positive integer');
+  }
+  return parsed;
+}
+
 async function createProduct(
   db,
-  { brandId, name, sku, shelfLifeDays, labelLanguage, primaryLanguage, secondaryLanguage }
+  {
+    brandId,
+    name,
+    sku,
+    shelfLifeDays,
+    labelLanguage,
+    primaryLanguage,
+    secondaryLanguage,
+    allergens,
+    storageConditions,
+    openedShelfLifeHours
+  }
 ) {
   const normalizedBrandId = requirePositiveInteger(brandId, 'brandId');
   const normalizedName = String(name || '').trim();
@@ -543,6 +690,10 @@ async function createProduct(
     throw new Error('secondaryLanguage is required for bilingual labels');
   }
 
+  const normalizedAllergens = String(allergens || '').trim() || null;
+  const normalizedStorageConditions = String(storageConditions || '').trim() || null;
+  const normalizedOpenedShelfLifeHours = normalizeOpenedShelfLifeHours(openedShelfLifeHours);
+
   const brand = await getBrandById(db, normalizedBrandId);
   if (!brand) {
     throw new Error('brandId not found');
@@ -556,21 +707,133 @@ async function createProduct(
       shelf_life_days,
       label_language,
       primary_language,
-      secondary_language
-    ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      secondary_language,
+      allergens,
+      storage_conditions,
+      opened_shelf_life_hours
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     normalizedBrandId,
     normalizedName,
     normalizedSku,
     normalizedShelfLifeDays,
     normalizedLabelLanguage,
     normalizedPrimaryLanguage,
-    normalizedSecondaryLanguage
+    normalizedSecondaryLanguage,
+    normalizedAllergens,
+    normalizedStorageConditions,
+    normalizedOpenedShelfLifeHours
   );
 
   return getProductById(db, result.lastID);
 }
 
-async function listProducts(db, { brandId } = {}) {
+const PRODUCT_UPDATE_COLUMN_MAP = {
+  name: 'name',
+  sku: 'sku',
+  shelfLifeDays: 'shelf_life_days',
+  labelLanguage: 'label_language',
+  primaryLanguage: 'primary_language',
+  secondaryLanguage: 'secondary_language',
+  allergens: 'allergens',
+  storageConditions: 'storage_conditions',
+  openedShelfLifeHours: 'opened_shelf_life_hours'
+};
+
+async function updateProduct(db, productId, fields = {}) {
+  const normalizedProductId = requirePositiveInteger(productId, 'productId');
+
+  const existing = await getProductById(db, normalizedProductId);
+  if (!existing) {
+    throw new Error('productId not found');
+  }
+
+  const assignments = [];
+  const values = [];
+
+  for (const [key, rawValue] of Object.entries(fields)) {
+    const column = PRODUCT_UPDATE_COLUMN_MAP[key];
+    if (!column || rawValue === undefined) {
+      continue;
+    }
+
+    let value = rawValue;
+    if (key === 'name') {
+      value = String(rawValue || '').trim();
+      if (!value) {
+        throw new Error('Product name is required');
+      }
+    } else if (key === 'sku') {
+      value = String(rawValue || '').trim() || null;
+    } else if (key === 'shelfLifeDays') {
+      const parsed = Number(rawValue);
+      if (!Number.isInteger(parsed) || parsed <= 0) {
+        throw new Error('shelfLifeDays must be a positive integer');
+      }
+      value = parsed;
+    } else if (key === 'labelLanguage') {
+      value = normalizeLabelLanguage(rawValue);
+    } else if (key === 'primaryLanguage') {
+      value = String(rawValue || 'en').trim().toLowerCase();
+    } else if (key === 'secondaryLanguage') {
+      value = String(rawValue || '').trim().toLowerCase() || null;
+    } else if (key === 'allergens') {
+      value = String(rawValue || '').trim() || null;
+    } else if (key === 'storageConditions') {
+      value = String(rawValue || '').trim() || null;
+    } else if (key === 'openedShelfLifeHours') {
+      value = normalizeOpenedShelfLifeHours(rawValue);
+    }
+
+    assignments.push(`${column} = ?`);
+    values.push(value);
+  }
+
+  if (assignments.length === 0) {
+    return existing;
+  }
+
+  // Validate resulting bilingual invariant against the merged state.
+  const effectiveLabelLanguage = fields.labelLanguage !== undefined
+    ? normalizeLabelLanguage(fields.labelLanguage)
+    : existing.labelLanguage;
+  const effectiveSecondary = fields.secondaryLanguage !== undefined
+    ? (String(fields.secondaryLanguage || '').trim().toLowerCase() || null)
+    : existing.secondaryLanguage;
+  if (effectiveLabelLanguage === LABEL_LANGUAGE_BILINGUAL && !effectiveSecondary) {
+    throw new Error('secondaryLanguage is required for bilingual labels');
+  }
+
+  assignments.push('updated_at = ?');
+  values.push(nowIso());
+  values.push(normalizedProductId);
+
+  await db.run(
+    `UPDATE products SET ${assignments.join(', ')} WHERE id = ?`,
+    ...values
+  );
+
+  return getProductById(db, normalizedProductId);
+}
+
+async function deleteProduct(db, productId) {
+  const normalizedProductId = requirePositiveInteger(productId, 'productId');
+  const existing = await getProductById(db, normalizedProductId);
+  if (!existing) {
+    throw new Error('productId not found');
+  }
+
+  await db.run(
+    `UPDATE products SET is_active = 0, updated_at = ? WHERE id = ?`,
+    nowIso(),
+    normalizedProductId
+  );
+
+  return getProductById(db, normalizedProductId);
+}
+
+async function listProducts(db, { brandId, includeInactive = false } = {}) {
+  const activeSql = includeInactive ? '' : 'AND p.is_active = 1';
+
   if (brandId != null) {
     const normalizedBrandId = requirePositiveInteger(brandId, 'brandId');
     return db.all(
@@ -583,11 +846,16 @@ async function listProducts(db, { brandId } = {}) {
               p.label_language AS labelLanguage,
               p.primary_language AS primaryLanguage,
               p.secondary_language AS secondaryLanguage,
+              p.allergens,
+              p.storage_conditions AS storageConditions,
+              p.opened_shelf_life_hours AS openedShelfLifeHours,
+              p.is_active AS isActive,
               p.created_at AS createdAt,
               p.updated_at AS updatedAt
        FROM products p
        JOIN brands b ON b.id = p.brand_id
        WHERE p.brand_id = ?
+       ${activeSql}
        ORDER BY p.id ASC`,
       normalizedBrandId
     );
@@ -603,10 +871,16 @@ async function listProducts(db, { brandId } = {}) {
             p.label_language AS labelLanguage,
             p.primary_language AS primaryLanguage,
             p.secondary_language AS secondaryLanguage,
+            p.allergens,
+            p.storage_conditions AS storageConditions,
+            p.opened_shelf_life_hours AS openedShelfLifeHours,
+            p.is_active AS isActive,
             p.created_at AS createdAt,
             p.updated_at AS updatedAt
      FROM products p
      JOIN brands b ON b.id = p.brand_id
+     WHERE 1=1
+     ${activeSql}
      ORDER BY p.id ASC`
   );
 }
@@ -657,6 +931,14 @@ async function createBatchWithReminders(db, { storeId, productId, quantity, prin
       expiresAtIso
     );
 
+    // Deterministic, traceable barcode so a scan can be reversed to the batch.
+    const barcodeData = `FG-${store.brandId}-${normalizedStoreId}-${batchInsert.lastID}`;
+    await db.run(
+      `UPDATE batches SET barcode_data = ? WHERE id = ?`,
+      barcodeData,
+      batchInsert.lastID
+    );
+
     for (let index = 0; index < normalizedQuantity; index += 1) {
       await db.run(
         `INSERT INTO reminders (batch_id, store_id, product_id, expires_at, status)
@@ -677,6 +959,7 @@ async function createBatchWithReminders(db, { storeId, productId, quantity, prin
               quantity,
               printed_at AS printedAt,
               expires_at AS expiresAt,
+              barcode_data AS barcodeData,
               created_at AS createdAt
        FROM batches
        WHERE id = ?`,
@@ -691,7 +974,10 @@ async function createBatchWithReminders(db, { storeId, productId, quantity, prin
       printedAt: batch.printedAt,
       expiresAt: batch.expiresAt,
       storeName: store.name,
-      languages
+      languages,
+      allergens: product.allergens,
+      storageConditions: product.storageConditions,
+      barcodeData: batch.barcodeData
     };
 
     return {
@@ -771,32 +1057,38 @@ async function handleReminder(db, { storeId, reminderId, reason, note }) {
     throw new Error('reason must be one of discarded, sold, transferred');
   }
 
-  const reminder = await db.get(
-    `SELECT id, store_id AS storeId, product_id AS productId, handled_at AS handledAt
-     FROM reminders
-     WHERE id = ? AND store_id = ?`,
-    normalizedReminderId,
-    normalizedStoreId
-  );
-
-  if (!reminder) {
-    throw new Error('Reminder not found');
-  }
-  if (reminder.handledAt) {
-    throw new Error('Reminder already handled');
-  }
-
   const handledAt = nowIso();
 
   await db.exec('BEGIN TRANSACTION');
   try {
-    await db.run(
+    // Read reminder inside transaction to avoid TOCTOU race
+    const reminder = await db.get(
+      `SELECT id, store_id AS storeId, product_id AS productId, handled_at AS handledAt
+       FROM reminders
+       WHERE id = ? AND store_id = ?`,
+      normalizedReminderId,
+      normalizedStoreId
+    );
+
+    if (!reminder) {
+      throw new Error('Reminder not found');
+    }
+    if (reminder.handledAt) {
+      throw new Error('Reminder already handled');
+    }
+
+    // Optimistic lock: AND handled_at IS NULL ensures we win the race
+    const updateResult = await db.run(
       `UPDATE reminders
        SET status = 'handled', handled_at = ?
-       WHERE id = ?`,
+       WHERE id = ? AND handled_at IS NULL`,
       handledAt,
       normalizedReminderId
     );
+
+    if (updateResult.changes === 0) {
+      throw new Error('Reminder already handled');
+    }
 
     await db.run(
       `INSERT INTO handling_logs (reminder_id, store_id, product_id, reason, note, handled_at)
@@ -829,7 +1121,166 @@ async function handleReminder(db, { storeId, reminderId, reason, note }) {
   }
 }
 
-async function listExpiredHandlingReport(db) {
+async function openReminder(db, { storeId, reminderId }) {
+  const normalizedStoreId = requirePositiveInteger(storeId, 'storeId');
+  const normalizedReminderId = requirePositiveInteger(reminderId, 'reminderId');
+
+  await db.exec('BEGIN TRANSACTION');
+  try {
+    const reminder = await db.get(
+      `SELECT id, batch_id AS batchId, store_id AS storeId, product_id AS productId
+       FROM reminders
+       WHERE id = ? AND store_id = ?`,
+      normalizedReminderId,
+      normalizedStoreId
+    );
+
+    if (!reminder) {
+      throw new Error('Reminder not found');
+    }
+
+    const product = await getProductById(db, reminder.productId);
+    if (!product) {
+      throw new Error('productId not found');
+    }
+    if (!product.openedShelfLifeHours) {
+      throw new Error('product has no opened_shelf_life_hours configured');
+    }
+
+    const store = await getStoreById(db, normalizedStoreId);
+    if (!store) {
+      throw new Error('storeId not found');
+    }
+
+    const batch = await db.get(
+      `SELECT id, barcode_data AS barcodeData, printed_at AS printedAt
+       FROM batches
+       WHERE id = ?`,
+      reminder.batchId
+    );
+
+    const openedAtIso = nowIso();
+    const expiresAtIso = new Date(
+      Date.parse(openedAtIso) + product.openedShelfLifeHours * 60 * 60 * 1000
+    ).toISOString();
+
+    const insertResult = await db.run(
+      `INSERT INTO reminders (batch_id, store_id, product_id, expires_at, status, note)
+       VALUES (?, ?, ?, ?, 'pending', 'opened')`,
+      reminder.batchId,
+      normalizedStoreId,
+      reminder.productId,
+      expiresAtIso
+    );
+
+    await db.exec('COMMIT');
+
+    const newReminder = await db.get(
+      `SELECT id,
+              batch_id AS batchId,
+              store_id AS storeId,
+              product_id AS productId,
+              expires_at AS expiresAt,
+              status,
+              note,
+              handled_at AS handledAt,
+              created_at AS createdAt
+       FROM reminders
+       WHERE id = ?`,
+      insertResult.lastID
+    );
+
+    const languages = getProductLabelLanguages(product);
+    const label = {
+      template: product.labelLanguage,
+      productName: product.name,
+      batchId: reminder.batchId,
+      printedAt: openedAtIso,
+      expiresAt: expiresAtIso,
+      storeName: store.name,
+      languages,
+      allergens: product.allergens,
+      storageConditions: product.storageConditions,
+      barcodeData: batch ? batch.barcodeData : null,
+      opened: true
+    };
+
+    return {
+      reminder: newReminder,
+      label: {
+        ...label,
+        text: renderLabelTemplate(label)
+      }
+    };
+  } catch (error) {
+    await db.exec('ROLLBACK');
+    throw error;
+  }
+}
+
+function recordAudit(db, { actorType, actorId, action, targetType, targetId, detail, ip }) {
+  // Audit logging must never break the main flow; swallow any error.
+  return db
+    .run(
+      `INSERT INTO audit_logs (actor_type, actor_id, action, target_type, target_id, detail, ip, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      actorType != null ? String(actorType) : null,
+      actorId != null ? String(actorId) : null,
+      action != null ? String(action) : null,
+      targetType != null ? String(targetType) : null,
+      targetId != null ? String(targetId) : null,
+      detail != null ? String(detail) : null,
+      ip != null ? String(ip) : null,
+      nowIso()
+    )
+    .catch((error) => {
+      console.warn('recordAudit failed:', error?.message || error);
+    });
+}
+
+async function listAuditLogs(db, { limit = 100 } = {}) {
+  const normalizedLimit = Number.isInteger(Number(limit)) && Number(limit) > 0 ? Number(limit) : 100;
+  return db.all(
+    `SELECT id,
+            actor_type AS actorType,
+            actor_id AS actorId,
+            action,
+            target_type AS targetType,
+            target_id AS targetId,
+            detail,
+            ip,
+            created_at AS createdAt
+     FROM audit_logs
+     ORDER BY id DESC
+     LIMIT ?`,
+    normalizedLimit
+  );
+}
+
+async function listExpiredHandlingReport(db, { brandId, startDate, endDate } = {}) {
+  const params = [];
+  const whereClauses = [];
+
+  if (brandId != null) {
+    const normalizedBrandId = requirePositiveInteger(brandId, 'brandId');
+    whereClauses.push('s.brand_id = ?');
+    params.push(normalizedBrandId);
+  }
+
+  // Optional date range filters expired reminders by handled_at (when handled)
+  // falling back to the batch printed_at for unhandled ones.
+  const effectiveDate = "COALESCE(r.handled_at, bt.printed_at)";
+  if (startDate != null && String(startDate).trim()) {
+    whereClauses.push(`datetime(${effectiveDate}) >= datetime(?)`);
+    params.push(String(startDate).trim());
+  }
+  if (endDate != null && String(endDate).trim()) {
+    whereClauses.push(`datetime(${effectiveDate}) <= datetime(?)`);
+    params.push(String(endDate).trim());
+  }
+
+  const whereSql = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
+
   return db.all(
     `SELECT s.id AS storeId,
             s.name AS storeName,
@@ -837,13 +1288,20 @@ async function listExpiredHandlingReport(db) {
             p.name AS productName,
             SUM(CASE WHEN datetime(r.expires_at) < datetime('now') THEN 1 ELSE 0 END) AS expiredTotalCount,
             SUM(CASE WHEN datetime(r.expires_at) < datetime('now') AND r.handled_at IS NOT NULL THEN 1 ELSE 0 END) AS expiredHandledCount,
-            SUM(CASE WHEN datetime(r.expires_at) < datetime('now') AND r.handled_at IS NULL THEN 1 ELSE 0 END) AS expiredUnhandledCount
+            SUM(CASE WHEN datetime(r.expires_at) < datetime('now') AND r.handled_at IS NULL THEN 1 ELSE 0 END) AS expiredUnhandledCount,
+            SUM(CASE WHEN datetime(r.expires_at) < datetime('now') AND hl.reason = 'discarded' THEN 1 ELSE 0 END) AS discardedCount,
+            SUM(CASE WHEN datetime(r.expires_at) < datetime('now') AND hl.reason = 'sold' THEN 1 ELSE 0 END) AS soldCount,
+            SUM(CASE WHEN datetime(r.expires_at) < datetime('now') AND hl.reason = 'transferred' THEN 1 ELSE 0 END) AS transferredCount
      FROM reminders r
      JOIN stores s ON s.id = r.store_id
      JOIN products p ON p.id = r.product_id
+     JOIN batches bt ON bt.id = r.batch_id
+     LEFT JOIN handling_logs hl ON hl.reminder_id = r.id
+     ${whereSql}
      GROUP BY s.id, p.id
      HAVING SUM(CASE WHEN datetime(r.expires_at) < datetime('now') THEN 1 ELSE 0 END) > 0
-     ORDER BY s.id ASC, p.id ASC`
+     ORDER BY s.id ASC, p.id ASC`,
+    ...params
   );
 }
 
@@ -859,11 +1317,14 @@ module.exports = {
   createDb,
   createProduct,
   createStore,
+  deleteProduct,
   ensureAdminUser,
+  getProductById,
   getStoreById,
   getUserByEmail,
   handleReminder,
   listAdminUsers,
+  listAuditLogs,
   listBindingCodes,
   listBrands,
   listExpiredHandlingReport,
@@ -871,5 +1332,8 @@ module.exports = {
   listStores,
   listStoreProducts,
   listStoreReminders,
+  openReminder,
+  recordAudit,
+  updateProduct,
   updateStorePrinterSettings
 };

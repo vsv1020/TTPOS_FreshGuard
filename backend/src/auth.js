@@ -8,7 +8,8 @@ function signAdminToken(user, jwtSecret, expiresIn = '12h') {
       sub: String(user.id),
       email: user.email,
       role: user.role,
-      tokenType: 'admin'
+      tokenType: 'admin',
+      brandId: user.brand_id != null ? user.brand_id : null
     },
     jwtSecret,
     { expiresIn }

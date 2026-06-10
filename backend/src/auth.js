@@ -2,6 +2,17 @@ const jwt = require('jsonwebtoken');
 
 const COOKIE_NAME = 'admin_token';
 
+// Admin console roles. Legacy tokens/rows use 'admin'; they are normalized to
+// platform_admin (no brand) or brand_admin (brand-scoped) at verification time.
+const ADMIN_ROLES = ['admin', 'platform_admin', 'brand_admin', 'viewer'];
+
+function normalizeAdminRole(decoded) {
+  if (decoded.role === 'admin') {
+    return decoded.brandId != null ? 'brand_admin' : 'platform_admin';
+  }
+  return decoded.role;
+}
+
 function signAdminToken(user, jwtSecret, expiresIn = '12h') {
   return jwt.sign(
     {
@@ -25,7 +36,8 @@ function signStoreToken(store, jwtSecret, expiresIn = '45d') {
       storeId: store.id,
       brandId: store.brandId,
       storeName: store.name,
-      brandName: store.brandName
+      brandName: store.brandName,
+      tokenVersion: store.tokenVersion != null ? store.tokenVersion : 0
     },
     jwtSecret,
     { expiresIn }
@@ -56,10 +68,10 @@ function requireAdminApi({ jwtSecret }) {
 
     try {
       const decoded = verifyToken(token, jwtSecret);
-      if (decoded.role !== 'admin') {
+      if (!ADMIN_ROLES.includes(decoded.role)) {
         return res.status(403).json({ error: 'Forbidden' });
       }
-      req.admin = decoded;
+      req.admin = { ...decoded, role: normalizeAdminRole(decoded) };
       return next();
     } catch (_error) {
       return res.status(401).json({ error: 'Unauthorized' });
@@ -67,8 +79,25 @@ function requireAdminApi({ jwtSecret }) {
   };
 }
 
-function requireStoreApi({ jwtSecret }) {
-  return (req, res, next) => {
+// Viewer accounts are read-only: any non-read /api/admin call is forbidden.
+const READ_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
+function blockViewerWrites(req, res, next) {
+  if (req.admin && req.admin.role === 'viewer' && !READ_METHODS.has(req.method)) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  return next();
+}
+
+// Admin-account management is platform_admin only. Must run after requireAdminApi.
+function requirePlatformAdmin(req, res, next) {
+  if (!req.admin || req.admin.role !== 'platform_admin') {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  return next();
+}
+
+function requireStoreApi({ jwtSecret, db }) {
+  return async (req, res, next) => {
     const token = extractToken(req);
     if (!token) {
       return res.status(401).json({ error: 'Unauthorized' });
@@ -78,6 +107,22 @@ function requireStoreApi({ jwtSecret }) {
       const decoded = verifyToken(token, jwtSecret);
       if (decoded.role !== 'store' || !decoded.storeId) {
         return res.status(403).json({ error: 'Forbidden' });
+      }
+      // Token revocation: stores carry a token_version; a token minted before
+      // the last revoke (or for a deleted store) is rejected. Legacy tokens
+      // without tokenVersion count as version 0, matching the column default.
+      if (db) {
+        const row = await db.get(
+          'SELECT token_version AS tokenVersion FROM stores WHERE id = ?',
+          decoded.storeId
+        );
+        if (!row) {
+          return res.status(401).json({ error: 'Unauthorized' });
+        }
+        const tokenVersion = decoded.tokenVersion != null ? Number(decoded.tokenVersion) : 0;
+        if (Number(row.tokenVersion || 0) !== tokenVersion) {
+          return res.status(401).json({ error: 'Unauthorized' });
+        }
       }
       req.storeAuth = decoded;
       return next();
@@ -96,10 +141,10 @@ function requireAdminWeb({ jwtSecret }) {
 
     try {
       const decoded = verifyToken(token, jwtSecret);
-      if (decoded.role !== 'admin') {
+      if (!ADMIN_ROLES.includes(decoded.role)) {
         return res.redirect('/admin/login');
       }
-      req.admin = decoded;
+      req.admin = { ...decoded, role: normalizeAdminRole(decoded) };
       return next();
     } catch (_error) {
       return res.redirect('/admin/login');
@@ -108,9 +153,12 @@ function requireAdminWeb({ jwtSecret }) {
 }
 
 module.exports = {
+  ADMIN_ROLES,
   COOKIE_NAME,
+  blockViewerWrites,
   requireAdminApi,
   requireAdminWeb,
+  requirePlatformAdmin,
   requireStoreApi,
   signAdminToken,
   signStoreToken

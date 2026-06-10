@@ -143,6 +143,15 @@ CREATE TABLE IF NOT EXISTS label_templates (
   FOREIGN KEY (brand_id) REFERENCES brands(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS pin_attempts (
+  store_id INTEGER NOT NULL,
+  staff_id INTEGER NOT NULL,
+  fail_count INTEGER NOT NULL DEFAULT 0,
+  locked_until TEXT,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (store_id, staff_id)
+);
+
 CREATE INDEX IF NOT EXISTS idx_stores_brand ON stores(brand_id);
 CREATE INDEX IF NOT EXISTS idx_products_brand ON products(brand_id);
 CREATE INDEX IF NOT EXISTS idx_binding_codes_store ON binding_codes(store_id);
@@ -310,6 +319,23 @@ async function createDb(filename) {
     await db.exec('ALTER TABLE users ADD COLUMN brand_id INTEGER REFERENCES brands(id) ON DELETE SET NULL');
   }
 
+  // Idempotent migration: RBAC role split + disabled flag on admin accounts.
+  // Legacy 'admin' rows become platform_admin (no brand) or brand_admin.
+  if (!userColumns.some((col) => col.name === 'disabled')) {
+    await db.exec('ALTER TABLE users ADD COLUMN disabled INTEGER NOT NULL DEFAULT 0');
+  }
+  await db.run(
+    `UPDATE users
+     SET role = CASE WHEN brand_id IS NULL THEN 'platform_admin' ELSE 'brand_admin' END
+     WHERE role = 'admin'`
+  );
+
+  // Idempotent migration: store token versioning for token revocation.
+  const storeColumns = await db.all('PRAGMA table_info(stores)');
+  if (!storeColumns.some((col) => col.name === 'token_version')) {
+    await db.exec('ALTER TABLE stores ADD COLUMN token_version INTEGER NOT NULL DEFAULT 0');
+  }
+
   // Idempotent migration: add new product columns for existing databases.
   // PRAGMA table_info returns rows: {cid, name, type, notnull, dflt_value, pk}
   const productColumns = await db.all('PRAGMA table_info(products)');
@@ -325,6 +351,11 @@ async function createDb(filename) {
   }
   if (!productColNames.has('opened_shelf_life_hours')) {
     await db.exec('ALTER TABLE products ADD COLUMN opened_shelf_life_hours INTEGER');
+  }
+  // P1-3: per-unit cost used by the waste report (nullable; missing costs
+  // count as 0 in discardAmount and are surfaced via missingCostCount).
+  if (!productColNames.has('cost_price')) {
+    await db.exec('ALTER TABLE products ADD COLUMN cost_price REAL');
   }
 
   // Idempotent migration: add barcode_data and note to batches/reminders for traceability + PAO.
@@ -373,9 +404,11 @@ async function closeDb(db) {
   await db.close();
 }
 
+const ADMIN_ACCOUNT_ROLES = ['platform_admin', 'brand_admin', 'viewer'];
+
 async function getUserByEmail(db, email) {
   return db.get(
-    `SELECT id, email, password_hash, role, brand_id, created_at
+    `SELECT id, email, password_hash, role, brand_id, disabled, created_at
      FROM users
      WHERE lower(email) = lower(?)`,
     email
@@ -386,9 +419,166 @@ async function listAdminUsers(db) {
   return db.all(
     `SELECT id, email, role, created_at
      FROM users
-     WHERE role = 'admin'
+     WHERE role IN ('admin', 'platform_admin', 'brand_admin', 'viewer')
      ORDER BY id ASC`
   );
+}
+
+// ─── P1-1: RBAC admin account management (platform_admin only) ───────────────
+
+async function getAdminAccountById(db, userId) {
+  return db.get(
+    `SELECT id, email, role, brand_id AS brandId, disabled, created_at AS createdAt
+     FROM users
+     WHERE id = ?`,
+    requirePositiveInteger(userId, 'userId')
+  );
+}
+
+function normalizeAdminAccountRole(role) {
+  const normalized = String(role || '').trim().toLowerCase();
+  if (!ADMIN_ACCOUNT_ROLES.includes(normalized)) {
+    throw new Error('role must be platform_admin, brand_admin, or viewer');
+  }
+  return normalized;
+}
+
+// Validates the role/brandId pair: platform_admin must be brand-less,
+// brand_admin must be brand-scoped, viewer may be either.
+async function normalizeAdminAccountBrandId(db, role, brandId) {
+  if (brandId == null || brandId === '') {
+    if (role === 'brand_admin') {
+      throw new Error('brandId is required for brand_admin');
+    }
+    return null;
+  }
+  if (role === 'platform_admin') {
+    throw new Error('platform_admin cannot be brand-scoped');
+  }
+  const normalizedBrandId = requirePositiveInteger(brandId, 'brandId');
+  const brand = await getBrandById(db, normalizedBrandId);
+  if (!brand) {
+    throw new Error('brandId not found');
+  }
+  return normalizedBrandId;
+}
+
+async function listAdminAccounts(db, { q, limit, offset } = {}) {
+  const whereClauses = [`role IN ('platform_admin', 'brand_admin', 'viewer')`];
+  const params = [];
+
+  if (q != null && String(q).trim()) {
+    whereClauses.push('email LIKE ?');
+    params.push(likeParam(q));
+  }
+
+  const fromSql = `FROM users
+     WHERE ${whereClauses.join(' AND ')}`;
+  const selectSql = `SELECT id, email, role, brand_id AS brandId, disabled, created_at AS createdAt
+     ${fromSql}
+     ORDER BY id ASC`;
+
+  const pagination = normalizePagination({ limit, offset });
+  if (!pagination) {
+    return db.all(selectSql, ...params);
+  }
+
+  const totalRow = await db.get(`SELECT COUNT(*) AS c ${fromSql}`, ...params);
+  const items = await db.all(
+    `${selectSql} LIMIT ? OFFSET ?`,
+    ...params,
+    pagination.limit,
+    pagination.offset
+  );
+  return { items, total: Number(totalRow?.c || 0), limit: pagination.limit, offset: pagination.offset };
+}
+
+async function createAdminAccount(db, { email, password, role, brandId }) {
+  const normalizedEmail = String(email || '').trim().toLowerCase();
+  const normalizedPassword = String(password || '');
+  if (!normalizedEmail) {
+    throw new Error('email is required');
+  }
+  if (!normalizedPassword) {
+    throw new Error('password is required');
+  }
+  const normalizedRole = normalizeAdminAccountRole(role);
+  const normalizedBrandId = await normalizeAdminAccountBrandId(db, normalizedRole, brandId);
+
+  const existing = await getUserByEmail(db, normalizedEmail);
+  if (existing) {
+    throw new Error('email already exists');
+  }
+
+  const passwordHash = await bcrypt.hash(normalizedPassword, 12);
+  const result = await db.run(
+    `INSERT INTO users (email, password_hash, role, brand_id)
+     VALUES (?, ?, ?, ?)`,
+    normalizedEmail,
+    passwordHash,
+    normalizedRole,
+    normalizedBrandId
+  );
+
+  return getAdminAccountById(db, result.lastID);
+}
+
+async function updateAdminAccount(db, userId, fields = {}) {
+  const normalizedUserId = requirePositiveInteger(userId, 'userId');
+  const existing = await getAdminAccountById(db, normalizedUserId);
+  if (!existing) {
+    throw new Error('userId not found');
+  }
+
+  const assignments = [];
+  const values = [];
+
+  // Validate the merged role/brandId pair so a partial update cannot leave an
+  // inconsistent account (e.g. brand-scoped platform_admin).
+  const effectiveRole = fields.role !== undefined
+    ? normalizeAdminAccountRole(fields.role)
+    : existing.role;
+  const effectiveBrandId = await normalizeAdminAccountBrandId(
+    db,
+    effectiveRole,
+    fields.brandId !== undefined ? fields.brandId : existing.brandId
+  );
+
+  if (fields.role !== undefined) {
+    assignments.push('role = ?');
+    values.push(effectiveRole);
+  }
+  if (fields.role !== undefined || fields.brandId !== undefined) {
+    assignments.push('brand_id = ?');
+    values.push(effectiveBrandId);
+  }
+  if (fields.disabled !== undefined) {
+    assignments.push('disabled = ?');
+    values.push(fields.disabled ? 1 : 0);
+  }
+
+  if (assignments.length === 0) {
+    return existing;
+  }
+
+  values.push(normalizedUserId);
+  await db.run(`UPDATE users SET ${assignments.join(', ')} WHERE id = ?`, ...values);
+  return getAdminAccountById(db, normalizedUserId);
+}
+
+async function resetAdminAccountPassword(db, userId, newPassword) {
+  const normalizedUserId = requirePositiveInteger(userId, 'userId');
+  const existing = await getAdminAccountById(db, normalizedUserId);
+  if (!existing) {
+    throw new Error('userId not found');
+  }
+  const normalizedPassword = String(newPassword || '');
+  if (!normalizedPassword) {
+    throw new Error('newPassword is required');
+  }
+  const passwordHash = await bcrypt.hash(normalizedPassword, 12);
+  await db.run('UPDATE users SET password_hash = ? WHERE id = ?', passwordHash, normalizedUserId);
+  return existing;
 }
 
 async function ensureAdminUser(db, { email, password }) {
@@ -407,7 +597,7 @@ async function ensureAdminUser(db, { email, password }) {
   const passwordHash = await bcrypt.hash(normalizedPassword, 12);
   await db.run(
     `INSERT INTO users (email, password_hash, role)
-     VALUES (?, ?, 'admin')`,
+     VALUES (?, ?, 'platform_admin')`,
     normalizedEmail,
     passwordHash
   );
@@ -454,6 +644,7 @@ async function getStoreById(db, storeId) {
             s.printer_port AS printerPort,
             s.printer_dpi AS printerDpi,
             s.label_width_mm AS labelWidthMm,
+            s.token_version AS tokenVersion,
             s.created_at AS createdAt,
             s.updated_at AS updatedAt
      FROM stores s
@@ -461,6 +652,22 @@ async function getStoreById(db, storeId) {
      WHERE s.id = ?`,
     storeId
   );
+}
+
+// P1-7: bump the store token version so every previously issued store JWT
+// (which embeds the version at signing time) becomes invalid.
+async function incrementStoreTokenVersion(db, storeId) {
+  const normalizedStoreId = requirePositiveInteger(storeId, 'storeId');
+  const existing = await getStoreById(db, normalizedStoreId);
+  if (!existing) {
+    throw new Error('storeId not found');
+  }
+  await db.run(
+    'UPDATE stores SET token_version = token_version + 1, updated_at = ? WHERE id = ?',
+    nowIso(),
+    normalizedStoreId
+  );
+  return getStoreById(db, normalizedStoreId);
 }
 
 async function listStores(db, { brandId } = {}) {
@@ -729,6 +936,7 @@ async function getProductById(db, productId) {
             p.allergens,
             p.storage_conditions AS storageConditions,
             p.opened_shelf_life_hours AS openedShelfLifeHours,
+            p.cost_price AS costPrice,
             p.is_active AS isActive,
             p.created_at AS createdAt,
             p.updated_at AS updatedAt
@@ -750,6 +958,17 @@ function normalizeOpenedShelfLifeHours(value) {
   return parsed;
 }
 
+function normalizeCostPrice(value) {
+  if (value == null || value === '') {
+    return null;
+  }
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    throw new Error('costPrice must be a non-negative number');
+  }
+  return parsed;
+}
+
 async function createProduct(
   db,
   {
@@ -762,7 +981,8 @@ async function createProduct(
     secondaryLanguage,
     allergens,
     storageConditions,
-    openedShelfLifeHours
+    openedShelfLifeHours,
+    costPrice
   }
 ) {
   const normalizedBrandId = requirePositiveInteger(brandId, 'brandId');
@@ -790,6 +1010,7 @@ async function createProduct(
   const normalizedAllergens = String(allergens || '').trim() || null;
   const normalizedStorageConditions = String(storageConditions || '').trim() || null;
   const normalizedOpenedShelfLifeHours = normalizeOpenedShelfLifeHours(openedShelfLifeHours);
+  const normalizedCostPrice = normalizeCostPrice(costPrice);
 
   const brand = await getBrandById(db, normalizedBrandId);
   if (!brand) {
@@ -807,8 +1028,9 @@ async function createProduct(
       secondary_language,
       allergens,
       storage_conditions,
-      opened_shelf_life_hours
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      opened_shelf_life_hours,
+      cost_price
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     normalizedBrandId,
     normalizedName,
     normalizedSku,
@@ -818,7 +1040,8 @@ async function createProduct(
     normalizedSecondaryLanguage,
     normalizedAllergens,
     normalizedStorageConditions,
-    normalizedOpenedShelfLifeHours
+    normalizedOpenedShelfLifeHours,
+    normalizedCostPrice
   );
 
   return getProductById(db, result.lastID);
@@ -833,7 +1056,8 @@ const PRODUCT_UPDATE_COLUMN_MAP = {
   secondaryLanguage: 'secondary_language',
   allergens: 'allergens',
   storageConditions: 'storage_conditions',
-  openedShelfLifeHours: 'opened_shelf_life_hours'
+  openedShelfLifeHours: 'opened_shelf_life_hours',
+  costPrice: 'cost_price'
 };
 
 async function updateProduct(db, productId, fields = {}) {
@@ -879,6 +1103,8 @@ async function updateProduct(db, productId, fields = {}) {
       value = String(rawValue || '').trim() || null;
     } else if (key === 'openedShelfLifeHours') {
       value = normalizeOpenedShelfLifeHours(rawValue);
+    } else if (key === 'costPrice') {
+      value = normalizeCostPrice(rawValue);
     }
 
     assignments.push(`${column} = ?`);
@@ -959,6 +1185,7 @@ async function listProducts(db, { brandId, includeInactive = false, q, limit, of
             p.allergens,
             p.storage_conditions AS storageConditions,
             p.opened_shelf_life_hours AS openedShelfLifeHours,
+            p.cost_price AS costPrice,
             p.is_active AS isActive,
             p.created_at AS createdAt,
             p.updated_at AS updatedAt
@@ -987,6 +1214,196 @@ async function listStoreProducts(db, storeId, { q, limit, offset } = {}) {
   }
 
   return listProducts(db, { brandId: store.brandId, q, limit, offset });
+}
+
+// ─── P1-2: products CSV import (admin) ────────────────────────────────────────
+
+// Minimal RFC-4180-style CSV parser (quotes, escaped quotes, CRLF, embedded
+// newlines). Returns [{ line, cells }] where `line` is the 1-based line number
+// the row starts on, so import errors can point at the right line.
+function parseCsvRows(text) {
+  const source = String(text == null ? '' : text);
+  const rows = [];
+  let cells = [];
+  let field = '';
+  let inQuotes = false;
+  let line = 1;
+  let rowStartLine = 1;
+
+  const pushField = () => {
+    cells.push(field);
+    field = '';
+  };
+  const pushRow = () => {
+    pushField();
+    rows.push({ line: rowStartLine, cells });
+    cells = [];
+    rowStartLine = line;
+  };
+
+  for (let i = 0; i < source.length; i += 1) {
+    const ch = source[i];
+    if (inQuotes) {
+      if (ch === '"') {
+        if (source[i + 1] === '"') {
+          field += '"';
+          i += 1;
+        } else {
+          inQuotes = false;
+        }
+      } else {
+        if (ch === '\n') {
+          line += 1;
+        }
+        field += ch;
+      }
+    } else if (ch === '"') {
+      inQuotes = true;
+    } else if (ch === ',') {
+      pushField();
+    } else if (ch === '\n') {
+      line += 1;
+      pushRow();
+    } else if (ch !== '\r') {
+      field += ch;
+    }
+  }
+  if (field !== '' || cells.length > 0) {
+    pushRow();
+  }
+  return rows;
+}
+
+// Importable product CSV fields. Header names double as API field names so an
+// exported file (GET /api/admin/products?format=csv) can be re-imported as-is.
+const PRODUCT_CSV_FIELDS = [
+  'brandId',
+  'name',
+  'sku',
+  'shelfLifeDays',
+  'labelLanguage',
+  'primaryLanguage',
+  'secondaryLanguage',
+  'allergens',
+  'storageConditions',
+  'openedShelfLifeHours',
+  'costPrice'
+];
+
+// Upsert key (per the products schema's UNIQUE(brand_id, sku) and
+// UNIQUE(brand_id, name) constraints): a row matches an existing product by
+// (brandId, sku) when the sku cell is non-empty, otherwise by (brandId, name).
+// Matched rows are updated (blank cells leave the stored value untouched),
+// the rest are inserted. The import runs in a single transaction that COMMITs
+// the valid rows even when some rows fail validation (partial success);
+// failures are reported per row with 1-based CSV line numbers.
+// `brandId` (option) is the caller's brand scope: when set, rows are forced
+// into that brand and a conflicting brandId cell is rejected; when unset
+// (platform admin) each row must carry its own brandId.
+async function importProductsCsv(db, { csv, brandId } = {}) {
+  const scopedBrandId = brandId != null && brandId !== ''
+    ? requirePositiveInteger(brandId, 'brandId')
+    : null;
+
+  const rows = parseCsvRows(csv);
+  if (rows.length === 0) {
+    throw new Error('csv is required');
+  }
+
+  const header = rows[0].cells.map((cell) => String(cell || '').trim());
+  const colIndex = new Map();
+  header.forEach((name, index) => {
+    if (name && !colIndex.has(name)) {
+      colIndex.set(name, index);
+    }
+  });
+  if (!colIndex.has('name') || !colIndex.has('shelfLifeDays')) {
+    throw new Error('csv header must include name and shelfLifeDays columns');
+  }
+
+  let inserted = 0;
+  let updated = 0;
+  const errors = [];
+
+  await db.exec('BEGIN TRANSACTION');
+  try {
+    for (const row of rows.slice(1)) {
+      if (row.cells.every((cell) => String(cell || '').trim() === '')) {
+        continue;
+      }
+      const cell = (field) => {
+        const index = colIndex.get(field);
+        if (index == null) {
+          return '';
+        }
+        return String(row.cells[index] == null ? '' : row.cells[index]).trim();
+      };
+
+      try {
+        let rowBrandId = scopedBrandId;
+        const brandCell = cell('brandId');
+        if (scopedBrandId != null) {
+          if (brandCell && Number(brandCell) !== scopedBrandId) {
+            throw new Error('brandId is outside your brand scope');
+          }
+        } else {
+          if (!brandCell) {
+            throw new Error('brandId is required');
+          }
+          rowBrandId = requirePositiveInteger(brandCell, 'brandId');
+        }
+
+        const name = cell('name');
+        if (!name) {
+          throw new Error('name is required');
+        }
+        const sku = cell('sku') || null;
+
+        const existing = sku
+          ? await db.get('SELECT id FROM products WHERE brand_id = ? AND sku = ?', rowBrandId, sku)
+          : await db.get('SELECT id FROM products WHERE brand_id = ? AND name = ?', rowBrandId, name);
+
+        if (existing) {
+          // Blank cells keep the stored value (so a sparse CSV is safe).
+          const patch = {};
+          for (const field of PRODUCT_CSV_FIELDS) {
+            if (field === 'brandId' || !colIndex.has(field)) {
+              continue;
+            }
+            const value = cell(field);
+            if (value !== '') {
+              patch[field] = value;
+            }
+          }
+          await updateProduct(db, existing.id, patch);
+          updated += 1;
+        } else {
+          await createProduct(db, {
+            brandId: rowBrandId,
+            name,
+            sku,
+            shelfLifeDays: cell('shelfLifeDays'),
+            labelLanguage: cell('labelLanguage') || 'single',
+            primaryLanguage: cell('primaryLanguage') || 'en',
+            secondaryLanguage: cell('secondaryLanguage') || null,
+            allergens: cell('allergens') || null,
+            storageConditions: cell('storageConditions') || null,
+            openedShelfLifeHours: cell('openedShelfLifeHours') || null,
+            costPrice: cell('costPrice') || null
+          });
+          inserted += 1;
+        }
+      } catch (error) {
+        errors.push({ line: row.line, message: String(error?.message || 'Invalid row') });
+      }
+    }
+    await db.exec('COMMIT');
+  } catch (error) {
+    await db.exec('ROLLBACK');
+    throw error;
+  }
+
+  return { inserted, updated, errors };
 }
 
 async function createBatchWithReminders(db, { storeId, productId, quantity, printedAt, staffId }) {
@@ -1390,6 +1807,135 @@ async function openReminder(db, { storeId, reminderId, staffId }) {
   }
 }
 
+// ─── P1-4/P1-5: barcode scan lookup + historical label reprint (store) ───────
+
+async function getStoreBatchById(db, { storeId, batchId }) {
+  return db.get(
+    `SELECT b.id,
+            b.store_id AS storeId,
+            b.product_id AS productId,
+            p.name AS productName,
+            b.quantity,
+            b.printed_at AS printedAt,
+            b.expires_at AS expiresAt,
+            b.barcode_data AS barcodeData,
+            b.printed_by_staff_id AS printedByStaffId,
+            b.created_at AS createdAt
+     FROM batches b
+     JOIN products p ON p.id = b.product_id
+     WHERE b.id = ? AND b.store_id = ?`,
+    requirePositiveInteger(batchId, 'batchId'),
+    requirePositiveInteger(storeId, 'storeId')
+  );
+}
+
+// Resolve a printed label barcode back to its batch, scoped to the calling
+// store (a barcode from another store is simply "not found"). Returns null
+// when no batch matches; otherwise { batch, reminder } where reminder is the
+// earliest unhandled reminder of the batch (FEFO) or null when all handled.
+async function getStoreBatchByBarcode(db, { storeId, code }) {
+  const normalizedStoreId = requirePositiveInteger(storeId, 'storeId');
+  const normalizedCode = String(code || '').trim();
+  if (!normalizedCode) {
+    throw new Error('code is required');
+  }
+
+  const batch = await db.get(
+    `SELECT b.id,
+            b.store_id AS storeId,
+            b.product_id AS productId,
+            p.name AS productName,
+            b.quantity,
+            b.printed_at AS printedAt,
+            b.expires_at AS expiresAt,
+            b.barcode_data AS barcodeData,
+            b.printed_by_staff_id AS printedByStaffId,
+            b.created_at AS createdAt
+     FROM batches b
+     JOIN products p ON p.id = b.product_id
+     WHERE b.barcode_data = ? AND b.store_id = ?`,
+    normalizedCode,
+    normalizedStoreId
+  );
+  if (!batch) {
+    return null;
+  }
+
+  const reminder = await db.get(
+    `SELECT r.id,
+            r.batch_id AS batchId,
+            r.store_id AS storeId,
+            r.product_id AS productId,
+            p.name AS productName,
+            r.expires_at AS expiresAt,
+            r.status,
+            r.note,
+            r.handled_at AS handledAt,
+            r.created_at AS createdAt
+     FROM reminders r
+     JOIN products p ON p.id = r.product_id
+     WHERE r.batch_id = ? AND r.handled_at IS NULL
+     ORDER BY datetime(r.expires_at) ASC, r.id ASC
+     LIMIT 1`,
+    batch.id
+  );
+
+  return { batch, reminder: reminder || null };
+}
+
+// Re-render the label of a historical batch. The returned `label` has exactly
+// the same shape as the `label` in the POST /api/store/print response (same
+// builder: default brand template when present, built-in layout otherwise).
+async function renderStoreBatchLabel(db, { storeId, batchId }) {
+  const normalizedStoreId = requirePositiveInteger(storeId, 'storeId');
+  const batch = await getStoreBatchById(db, { storeId: normalizedStoreId, batchId });
+  if (!batch) {
+    throw new Error('batchId not found');
+  }
+
+  const store = await getStoreById(db, normalizedStoreId);
+  if (!store) {
+    throw new Error('storeId not found');
+  }
+  const product = await getProductById(db, batch.productId);
+  if (!product) {
+    throw new Error('productId not found');
+  }
+
+  const languages = getProductLabelLanguages(product);
+  const label = {
+    template: product.labelLanguage,
+    productName: product.name,
+    batchId: batch.id,
+    printedAt: batch.printedAt,
+    expiresAt: batch.expiresAt,
+    storeName: store.name,
+    languages,
+    allergens: product.allergens,
+    storageConditions: product.storageConditions,
+    barcodeData: batch.barcodeData,
+    staffId: batch.printedByStaffId != null ? batch.printedByStaffId : null
+  };
+
+  const defaultTemplate = await getDefaultLabelTemplate(db, { brandId: store.brandId });
+  const templateFields = buildLabelTemplateFields(label);
+  const text = defaultTemplate && defaultTemplate.bodyTemplate
+    ? renderLabelFromTemplate(defaultTemplate.bodyTemplate, templateFields)
+    : renderLabelTemplate(label);
+
+  return {
+    batch,
+    store,
+    printerSettings: getStorePrinterSettings(store),
+    label: {
+      ...label,
+      templateBody: defaultTemplate ? defaultTemplate.bodyTemplate : null,
+      fields: templateFields,
+      text
+    }
+  };
+}
+
 // ─── Feature A: Store staff (PIN attribution, not an auth boundary) ──────────
 
 async function getStoreStaffById(db, staffId) {
@@ -1551,6 +2097,75 @@ async function verifyStoreStaffPin(db, { storeId, staffId, pin }) {
     return false;
   }
   return bcrypt.compare(String(pin || ''), row.pinHash);
+}
+
+// ─── P1-7: verify-pin throttling (SQLite-persisted, survives restarts) ───────
+// Same store+staff: 5 consecutive failures lock for 15 minutes; any success
+// clears the counter.
+
+const PIN_MAX_FAILURES = 5;
+const PIN_LOCK_MINUTES = 15;
+
+async function getPinLockState(db, { storeId, staffId }) {
+  const row = await db.get(
+    `SELECT locked_until AS lockedUntil
+     FROM pin_attempts
+     WHERE store_id = ? AND staff_id = ?`,
+    requirePositiveInteger(storeId, 'storeId'),
+    requirePositiveInteger(staffId, 'staffId')
+  );
+  if (!row || !row.lockedUntil) {
+    return { locked: false };
+  }
+  const remainingMs = new Date(row.lockedUntil).getTime() - Date.now();
+  if (remainingMs <= 0) {
+    return { locked: false };
+  }
+  return { locked: true, retryAfterSeconds: Math.ceil(remainingMs / 1000) };
+}
+
+async function recordPinFailure(db, { storeId, staffId }) {
+  const normalizedStoreId = requirePositiveInteger(storeId, 'storeId');
+  const normalizedStaffId = requirePositiveInteger(staffId, 'staffId');
+  await db.run(
+    `INSERT INTO pin_attempts (store_id, staff_id, fail_count, updated_at)
+     VALUES (?, ?, 1, ?)
+     ON CONFLICT(store_id, staff_id)
+     DO UPDATE SET fail_count = fail_count + 1, updated_at = excluded.updated_at`,
+    normalizedStoreId,
+    normalizedStaffId,
+    nowIso()
+  );
+  const row = await db.get(
+    `SELECT fail_count AS failCount
+     FROM pin_attempts
+     WHERE store_id = ? AND staff_id = ?`,
+    normalizedStoreId,
+    normalizedStaffId
+  );
+  if (Number(row?.failCount || 0) >= PIN_MAX_FAILURES) {
+    const lockedUntil = new Date(Date.now() + PIN_LOCK_MINUTES * 60 * 1000).toISOString();
+    // Reset the counter so a fresh streak starts after the lock expires.
+    await db.run(
+      `UPDATE pin_attempts
+       SET locked_until = ?, fail_count = 0, updated_at = ?
+       WHERE store_id = ? AND staff_id = ?`,
+      lockedUntil,
+      nowIso(),
+      normalizedStoreId,
+      normalizedStaffId
+    );
+    return { locked: true, lockedUntil };
+  }
+  return { locked: false, failCount: Number(row?.failCount || 0) };
+}
+
+async function clearPinFailures(db, { storeId, staffId }) {
+  await db.run(
+    'DELETE FROM pin_attempts WHERE store_id = ? AND staff_id = ?',
+    requirePositiveInteger(storeId, 'storeId'),
+    requirePositiveInteger(staffId, 'staffId')
+  );
 }
 
 // Resolve an optional staffId for a store; returns the numeric id if the staff
@@ -1909,6 +2524,164 @@ async function getInspectionScoreTrend(db, { brandId, days = 30 } = {}) {
   );
 }
 
+// ─── P1-3: waste dashboard report ─────────────────────────────────────────────
+// totalBatches counts batches printed in the [from, to] window; discardedCount
+// counts distinct batches with at least one 'discarded' handling log handled in
+// the window; wasteRate = discardedCount / totalBatches (0 when no batches).
+// discardAmount sums products.cost_price once per discarded unit (handling
+// log); units whose product has no cost contribute 0 and are counted in
+// summary.missingCostCount. byReason counts handling-log units per reason.
+async function getWasteReport(db, { brandId, storeId, from, to } = {}) {
+  const normalizedBrandId = brandId != null && brandId !== ''
+    ? requirePositiveInteger(brandId, 'brandId')
+    : null;
+  const normalizedStoreId = storeId != null && storeId !== ''
+    ? requirePositiveInteger(storeId, 'storeId')
+    : null;
+  const normalizedFrom = from != null && String(from).trim() ? String(from).trim() : null;
+  const normalizedTo = to != null && String(to).trim() ? String(to).trim() : null;
+
+  const buildFilter = (dateColumn) => {
+    const clauses = ['1=1'];
+    const params = [];
+    if (normalizedBrandId != null) {
+      clauses.push('s.brand_id = ?');
+      params.push(normalizedBrandId);
+    }
+    if (normalizedStoreId != null) {
+      clauses.push('s.id = ?');
+      params.push(normalizedStoreId);
+    }
+    if (normalizedFrom) {
+      clauses.push(`datetime(${dateColumn}) >= datetime(?)`);
+      params.push(normalizedFrom);
+    }
+    if (normalizedTo) {
+      clauses.push(`datetime(${dateColumn}) <= datetime(?)`);
+      params.push(normalizedTo);
+    }
+    return { whereSql: clauses.join(' AND '), params };
+  };
+
+  const batchFilter = buildFilter('b.printed_at');
+  const totalsByStore = await db.all(
+    `SELECT s.id AS storeId, s.name AS storeName, COUNT(*) AS totalBatches
+     FROM batches b
+     JOIN stores s ON s.id = b.store_id
+     WHERE ${batchFilter.whereSql}
+     GROUP BY s.id`,
+    ...batchFilter.params
+  );
+  const totalsByProduct = await db.all(
+    `SELECT p.id AS productId, p.name AS productName, COUNT(*) AS totalBatches
+     FROM batches b
+     JOIN stores s ON s.id = b.store_id
+     JOIN products p ON p.id = b.product_id
+     WHERE ${batchFilter.whereSql}
+     GROUP BY p.id`,
+    ...batchFilter.params
+  );
+
+  const logFilter = buildFilter('hl.handled_at');
+  const logFromSql = `FROM handling_logs hl
+     JOIN reminders r ON r.id = hl.reminder_id
+     JOIN stores s ON s.id = hl.store_id
+     JOIN products p ON p.id = hl.product_id
+     WHERE ${logFilter.whereSql}`;
+
+  const discardSelect = `COUNT(DISTINCT r.batch_id) AS discardedCount,
+            SUM(COALESCE(p.cost_price, 0)) AS discardAmount,
+            SUM(CASE WHEN p.cost_price IS NULL THEN 1 ELSE 0 END) AS missingCostCount`;
+
+  const discardByStore = await db.all(
+    `SELECT s.id AS storeId, s.name AS storeName, ${discardSelect}
+     ${logFromSql} AND hl.reason = 'discarded'
+     GROUP BY s.id`,
+    ...logFilter.params
+  );
+  const discardByProduct = await db.all(
+    `SELECT p.id AS productId, p.name AS productName, ${discardSelect}
+     ${logFromSql} AND hl.reason = 'discarded'
+     GROUP BY p.id`,
+    ...logFilter.params
+  );
+  const byReason = await db.all(
+    `SELECT hl.reason AS reason, COUNT(*) AS count
+     ${logFromSql}
+     GROUP BY hl.reason
+     ORDER BY hl.reason ASC`,
+    ...logFilter.params
+  );
+  const trend = await db.all(
+    `SELECT date(hl.handled_at) AS date,
+            COUNT(DISTINCT r.batch_id) AS discardedCount,
+            SUM(COALESCE(p.cost_price, 0)) AS discardAmount
+     ${logFromSql} AND hl.reason = 'discarded'
+     GROUP BY date(hl.handled_at)
+     ORDER BY date(hl.handled_at) ASC`,
+    ...logFilter.params
+  );
+
+  // Merge totals with discard aggregates (a key may appear in only one side,
+  // e.g. a batch printed before the window but discarded inside it).
+  const mergeRows = (totals, discards, idKey, nameKey) => {
+    const map = new Map();
+    for (const row of totals) {
+      map.set(row[idKey], {
+        [idKey]: row[idKey],
+        [nameKey]: row[nameKey],
+        totalBatches: Number(row.totalBatches || 0),
+        discardedCount: 0,
+        discardAmount: 0
+      });
+    }
+    for (const row of discards) {
+      const entry = map.get(row[idKey]) || {
+        [idKey]: row[idKey],
+        [nameKey]: row[nameKey],
+        totalBatches: 0,
+        discardedCount: 0,
+        discardAmount: 0
+      };
+      entry.discardedCount = Number(row.discardedCount || 0);
+      entry.discardAmount = Number(row.discardAmount || 0);
+      map.set(row[idKey], entry);
+    }
+    return Array.from(map.values())
+      .map((entry) => ({
+        ...entry,
+        wasteRate: entry.totalBatches > 0 ? entry.discardedCount / entry.totalBatches : 0
+      }))
+      .sort((a, b) => a[idKey] - b[idKey]);
+  };
+
+  const byStore = mergeRows(totalsByStore, discardByStore, 'storeId', 'storeName');
+  const byProduct = mergeRows(totalsByProduct, discardByProduct, 'productId', 'productName');
+
+  const totalBatches = totalsByStore.reduce((sum, row) => sum + Number(row.totalBatches || 0), 0);
+  const discardedCount = discardByStore.reduce((sum, row) => sum + Number(row.discardedCount || 0), 0);
+  const discardAmount = discardByStore.reduce((sum, row) => sum + Number(row.discardAmount || 0), 0);
+  const missingCostCount = discardByStore.reduce((sum, row) => sum + Number(row.missingCostCount || 0), 0);
+
+  return {
+    summary: {
+      totalBatches,
+      discardedCount,
+      wasteRate: totalBatches > 0 ? discardedCount / totalBatches : 0,
+      discardAmount,
+      missingCostCount
+    },
+    byStore,
+    byProduct,
+    byReason: byReason.map((row) => ({ reason: row.reason, count: Number(row.count || 0) })),
+    trend: trend.map((row) => ({
+      date: row.date,
+      discardedCount: Number(row.discardedCount || 0),
+      discardAmount: Number(row.discardAmount || 0)
+    }))
+  };
+}
+
 function recordAudit(db, { actorType, actorId, action, targetType, targetId, detail, ip, brandId }) {
   // Audit logging must never break the main flow; swallow any error.
   return db
@@ -2164,8 +2937,11 @@ module.exports = {
   HANDLING_REASONS,
   LABEL_LANGUAGE_BILINGUAL,
   LABEL_LANGUAGE_SINGLE,
+  PRODUCT_CSV_FIELDS,
+  clearPinFailures,
   closeDb,
   consumeBindingCode,
+  createAdminAccount,
   createBatchWithReminders,
   createBindingCode,
   createBrand,
@@ -2178,18 +2954,25 @@ module.exports = {
   deleteLabelTemplate,
   deleteProduct,
   ensureAdminUser,
+  getAdminAccountById,
   getBrandReminderConfig,
   getDashboardSummary,
   getDefaultLabelTemplate,
   getInspectionScoreTrend,
   getLabelTemplateById,
   getLossTrend,
+  getPinLockState,
   getProductById,
+  getStoreBatchByBarcode,
   getStoreById,
   getStoreExpiryRanking,
   getStoreStaffById,
   getUserByEmail,
+  getWasteReport,
   handleReminder,
+  importProductsCsv,
+  incrementStoreTokenVersion,
+  listAdminAccounts,
   listAdminUsers,
   listAuditLogs,
   listBindingCodes,
@@ -2203,9 +2986,13 @@ module.exports = {
   listStoreStaff,
   openReminder,
   recordAudit,
+  recordPinFailure,
+  resetAdminAccountPassword,
   renderLabelFromTemplate,
   renderLabelTemplate,
+  renderStoreBatchLabel,
   runReminderScan,
+  updateAdminAccount,
   updateBrandReminderConfig,
   updateLabelTemplate,
   updateProduct,

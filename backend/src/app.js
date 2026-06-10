@@ -5,9 +5,12 @@ const cors = require('cors');
 const express = require('express');
 const rateLimit = require('express-rate-limit');
 const {
+  ADMIN_ROLES,
   COOKIE_NAME,
+  blockViewerWrites,
   requireAdminApi,
   requireAdminWeb,
+  requirePlatformAdmin,
   requireStoreApi,
   signAdminToken,
   signStoreToken
@@ -15,7 +18,10 @@ const {
 const { initInspectionSchema, listInspections } = require('./inspection-db');
 const { buildInspectionRoutes } = require('./inspection-routes');
 const {
+  PRODUCT_CSV_FIELDS,
+  clearPinFailures,
   consumeBindingCode,
+  createAdminAccount,
   createBatchWithReminders,
   createBindingCode,
   createBrand,
@@ -31,12 +37,18 @@ const {
   getInspectionScoreTrend,
   getLabelTemplateById,
   getLossTrend,
+  getPinLockState,
   getProductById,
+  getStoreBatchByBarcode,
   getStoreById,
   getStoreExpiryRanking,
   getStoreStaffById,
   getUserByEmail,
+  getWasteReport,
   handleReminder,
+  importProductsCsv,
+  incrementStoreTokenVersion,
+  listAdminAccounts,
   listAdminUsers,
   listAuditLogs,
   listBindingCodes,
@@ -50,7 +62,11 @@ const {
   listStoreStaff,
   openReminder,
   recordAudit,
+  recordPinFailure,
   renderLabelFromTemplate,
+  renderStoreBatchLabel,
+  resetAdminAccountPassword,
+  updateAdminAccount,
   updateBrandReminderConfig,
   updateLabelTemplate,
   updateProduct,
@@ -116,12 +132,18 @@ function sendCsv(res, filename, columns, rows) {
   return res.send(rowsToCsv(columns, rows));
 }
 
+// P1-2: products CSV columns. Header labels equal the import field names so an
+// exported file (or the downloaded template) can be re-imported unchanged.
+const PRODUCT_CSV_COLUMNS = PRODUCT_CSV_FIELDS.map((field) => ({ key: field, label: field }));
+
 function buildApp({ db, jwtSecret, adminWebDir }) {
   const app = express();
   const webRoot = adminWebDir || path.join(__dirname, '..', 'admin-web');
-  const adminApiAuth = requireAdminApi({ jwtSecret });
+  // Viewer accounts are read-only across every /api/admin route (including the
+  // inspection router, which receives this same middleware chain).
+  const adminApiAuth = [requireAdminApi({ jwtSecret }), blockViewerWrites];
   const adminWebAuth = requireAdminWeb({ jwtSecret });
-  const storeApiAuth = requireStoreApi({ jwtSecret });
+  const storeApiAuth = requireStoreApi({ jwtSecret, db });
 
   const corsOrigins = process.env.CORS_ORIGINS
     ? process.env.CORS_ORIGINS.split(',').map((o) => o.trim()).filter(Boolean)
@@ -135,12 +157,15 @@ function buildApp({ db, jwtSecret, adminWebDir }) {
 
   const isTest = process.env.NODE_ENV === 'test';
 
+  // JSON message so both admin-web (body.error) and the Flutter app
+  // (parsed['error']) can render the 429 instead of choking on plain text.
   const loginLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
     max: 20,
     standardHeaders: true,
     legacyHeaders: false,
-    skip: () => isTest
+    skip: () => isTest,
+    message: { error: 'Too many login attempts. Try again later.' }
   });
 
   const bindLimiter = rateLimit({
@@ -148,7 +173,8 @@ function buildApp({ db, jwtSecret, adminWebDir }) {
     max: 10,
     standardHeaders: true,
     legacyHeaders: false,
-    skip: () => isTest
+    skip: () => isTest,
+    message: { error: 'Too many binding attempts. Try again later.' }
   });
 
   // Inspection module
@@ -169,7 +195,7 @@ function buildApp({ db, jwtSecret, adminWebDir }) {
     }
 
     const user = await getUserByEmail(db, email);
-    if (!user || user.role !== 'admin') {
+    if (!user || !ADMIN_ROLES.includes(user.role) || user.disabled) {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 
@@ -202,7 +228,8 @@ function buildApp({ db, jwtSecret, adminWebDir }) {
       user: {
         id: user.id,
         email: user.email,
-        role: user.role
+        role: user.role,
+        brandId: user.brand_id != null ? user.brand_id : null
       }
     });
   });
@@ -216,13 +243,95 @@ function buildApp({ db, jwtSecret, adminWebDir }) {
     return res.json({
       id: Number(req.admin.sub),
       email: req.admin.email,
-      role: req.admin.role
+      role: req.admin.role,
+      brandId: req.admin.brandId != null ? req.admin.brandId : null
     });
   });
 
   app.get('/api/admin/users', adminApiAuth, async (_req, res) => {
     const users = await listAdminUsers(db);
     return res.json({ users });
+  });
+
+  // ─── P1-1: RBAC admin account management (platform_admin only) ──────────
+
+  app.get('/api/admin/admins', adminApiAuth, requirePlatformAdmin, async (req, res) => {
+    try {
+      const result = await listAdminAccounts(db, {
+        q: req.query.q,
+        limit: req.query.limit,
+        offset: req.query.offset
+      });
+      return sendList(res, 'admins', result);
+    } catch (error) {
+      return respondDataError(res, error);
+    }
+  });
+
+  app.post('/api/admin/admins', adminApiAuth, requirePlatformAdmin, async (req, res) => {
+    try {
+      const admin = await createAdminAccount(db, {
+        email: req.body?.email,
+        password: req.body?.password,
+        role: req.body?.role,
+        brandId: req.body?.brandId
+      });
+      recordAudit(db, {
+        actorType: 'admin',
+        actorId: req.admin.email,
+        action: 'admin.create',
+        targetType: 'user',
+        targetId: admin.id,
+        detail: `${admin.email} role=${admin.role}`,
+        ip: req.ip,
+        brandId: admin.brandId
+      });
+      return res.status(201).json({ admin });
+    } catch (error) {
+      return respondDataError(res, error);
+    }
+  });
+
+  app.put('/api/admin/admins/:id', adminApiAuth, requirePlatformAdmin, async (req, res) => {
+    try {
+      const admin = await updateAdminAccount(db, req.params.id, {
+        role: req.body?.role,
+        brandId: req.body?.brandId,
+        disabled: req.body?.disabled
+      });
+      recordAudit(db, {
+        actorType: 'admin',
+        actorId: req.admin.email,
+        action: 'admin.update',
+        targetType: 'user',
+        targetId: admin.id,
+        detail: `${admin.email} role=${admin.role} disabled=${admin.disabled}`,
+        ip: req.ip,
+        brandId: admin.brandId
+      });
+      return res.json({ admin });
+    } catch (error) {
+      return respondDataError(res, error);
+    }
+  });
+
+  app.post('/api/admin/admins/:id/reset-password', adminApiAuth, requirePlatformAdmin, async (req, res) => {
+    try {
+      const admin = await resetAdminAccountPassword(db, req.params.id, req.body?.newPassword);
+      recordAudit(db, {
+        actorType: 'admin',
+        actorId: req.admin.email,
+        action: 'admin.reset-password',
+        targetType: 'user',
+        targetId: admin.id,
+        detail: admin.email,
+        ip: req.ip,
+        brandId: admin.brandId
+      });
+      return res.json({ ok: true });
+    } catch (error) {
+      return respondDataError(res, error);
+    }
   });
 
   app.get('/api/admin/brands', adminApiAuth, async (_req, res) => {
@@ -341,6 +450,29 @@ function buildApp({ db, jwtSecret, adminWebDir }) {
     }
   });
 
+  // P1-7: bump the store token_version so all previously issued store JWTs
+  // become invalid on the next request.
+  app.post('/api/admin/stores/:storeId/revoke-tokens', adminApiAuth, async (req, res) => {
+    try {
+      const store = await assertStoreInScope(req, res, req.params.storeId);
+      if (!store) return undefined;
+      const updated = await incrementStoreTokenVersion(db, req.params.storeId);
+      recordAudit(db, {
+        actorType: 'admin',
+        actorId: req.admin.email,
+        action: 'store.tokens.revoke',
+        targetType: 'store',
+        targetId: updated.id,
+        detail: `tokenVersion=${updated.tokenVersion}`,
+        ip: req.ip,
+        brandId: updated.brandId
+      });
+      return res.json({ store: updated });
+    } catch (error) {
+      return respondDataError(res, error);
+    }
+  });
+
   app.get('/api/admin/binding-codes', adminApiAuth, async (req, res) => {
     try {
       const brandId = req.admin.brandId != null ? req.admin.brandId : undefined;
@@ -388,7 +520,49 @@ function buildApp({ db, jwtSecret, adminWebDir }) {
         limit: req.query.limit,
         offset: req.query.offset
       });
+
+      // P1-2: CSV export (same format=csv pattern as the expired-handling report).
+      if (req.query.format === 'csv') {
+        const rows = Array.isArray(result) ? result : result.items;
+        return sendCsv(res, 'products.csv', PRODUCT_CSV_COLUMNS, rows);
+      }
+
       return sendList(res, 'products', result);
+    } catch (error) {
+      return respondDataError(res, error);
+    }
+  });
+
+  // P1-2: empty CSV template whose header matches the import field names.
+  app.get('/api/admin/products/import-template.csv', adminApiAuth, (_req, res) => {
+    return sendCsv(res, 'products-import-template.csv', PRODUCT_CSV_COLUMNS, []);
+  });
+
+  // P1-2: CSV import. Upsert key: (brandId, sku) when sku is present, else
+  // (brandId, name) — see importProductsCsv in db.js. Valid rows commit even
+  // when other rows fail (partial success), reported via errors + message.
+  app.post('/api/admin/products/import', adminApiAuth, async (req, res) => {
+    try {
+      const result = await importProductsCsv(db, {
+        csv: req.body?.csv,
+        brandId: req.admin.brandId != null ? req.admin.brandId : undefined
+      });
+      recordAudit(db, {
+        actorType: 'admin',
+        actorId: req.admin.email,
+        action: 'product.import',
+        targetType: 'product',
+        targetId: null,
+        detail: `inserted=${result.inserted} updated=${result.updated} errors=${result.errors.length}`,
+        ip: req.ip,
+        brandId: req.admin.brandId != null ? req.admin.brandId : null
+      });
+      return res.json({
+        ...result,
+        message: result.errors.length > 0
+          ? `Imported ${result.inserted + result.updated} valid rows (${result.inserted} inserted, ${result.updated} updated); ${result.errors.length} rows failed and were skipped.`
+          : `Imported ${result.inserted + result.updated} rows (${result.inserted} inserted, ${result.updated} updated).`
+      });
     } catch (error) {
       return respondDataError(res, error);
     }
@@ -406,7 +580,8 @@ function buildApp({ db, jwtSecret, adminWebDir }) {
         secondaryLanguage: req.body?.secondaryLanguage,
         allergens: req.body?.allergens,
         storageConditions: req.body?.storageConditions,
-        openedShelfLifeHours: req.body?.openedShelfLifeHours
+        openedShelfLifeHours: req.body?.openedShelfLifeHours,
+        costPrice: req.body?.costPrice
       });
       recordAudit(db, {
         actorType: 'admin',
@@ -443,7 +618,8 @@ function buildApp({ db, jwtSecret, adminWebDir }) {
         secondaryLanguage: req.body?.secondaryLanguage,
         allergens: req.body?.allergens,
         storageConditions: req.body?.storageConditions,
-        openedShelfLifeHours: req.body?.openedShelfLifeHours
+        openedShelfLifeHours: req.body?.openedShelfLifeHours,
+        costPrice: req.body?.costPrice
       });
       recordAudit(db, {
         actorType: 'admin',
@@ -525,6 +701,23 @@ function buildApp({ db, jwtSecret, adminWebDir }) {
         return res.json(result);
       }
       return res.json({ rows });
+    } catch (error) {
+      return respondDataError(res, error);
+    }
+  });
+
+  // P1-3: waste dashboard. Brand-scoped admins are automatically narrowed to
+  // their own brand; platform admins may pass brandId/storeId filters.
+  app.get('/api/admin/reports/waste', adminApiAuth, async (req, res) => {
+    try {
+      const brandId = req.admin.brandId != null ? req.admin.brandId : (req.query.brandId || undefined);
+      const report = await getWasteReport(db, {
+        brandId,
+        storeId: req.query.storeId,
+        from: req.query.from,
+        to: req.query.to
+      });
+      return res.json(report);
     } catch (error) {
       return respondDataError(res, error);
     }
@@ -930,13 +1123,31 @@ function buildApp({ db, jwtSecret, adminWebDir }) {
     }
   });
 
+  // P1-7: SQLite-persisted throttle — 5 consecutive failures for the same
+  // store+staff lock verification for 15 minutes (survives restarts).
   app.post('/api/store/staff/:staffId/verify-pin', storeApiAuth, async (req, res) => {
     try {
+      const storeId = req.storeAuth.storeId;
+      const staffId = req.params.staffId;
+
+      const lock = await getPinLockState(db, { storeId, staffId });
+      if (lock.locked) {
+        return res.status(429).json({
+          message: 'Too many failed PIN attempts. Try again later.',
+          retryAfterSeconds: lock.retryAfterSeconds
+        });
+      }
+
       const valid = await verifyStoreStaffPin(db, {
-        storeId: req.storeAuth.storeId,
-        staffId: req.params.staffId,
+        storeId,
+        staffId,
         pin: req.body?.pin
       });
+      if (valid) {
+        await clearPinFailures(db, { storeId, staffId });
+      } else {
+        await recordPinFailure(db, { storeId, staffId });
+      }
       return res.json({ valid });
     } catch (error) {
       return respondDataError(res, error);
@@ -965,6 +1176,37 @@ function buildApp({ db, jwtSecret, adminWebDir }) {
       });
 
       return res.status(201).json(result);
+    } catch (error) {
+      return respondDataError(res, error);
+    }
+  });
+
+  // P1-4: resolve a scanned label barcode to its batch (own store only; a
+  // barcode from another store is indistinguishable from an unknown one).
+  app.get('/api/store/batches/by-barcode', storeApiAuth, async (req, res) => {
+    try {
+      const result = await getStoreBatchByBarcode(db, {
+        storeId: req.storeAuth.storeId,
+        code: req.query.code
+      });
+      if (!result) {
+        return res.status(404).json({ message: 'No batch found for this barcode in your store' });
+      }
+      return res.json(result);
+    } catch (error) {
+      return respondDataError(res, error);
+    }
+  });
+
+  // P1-5: re-render a historical batch label for reprinting. The `label`
+  // shape matches the POST /api/store/print response.
+  app.get('/api/store/batches/:batchId/label', storeApiAuth, async (req, res) => {
+    try {
+      const result = await renderStoreBatchLabel(db, {
+        storeId: req.storeAuth.storeId,
+        batchId: req.params.batchId
+      });
+      return res.json(result);
     } catch (error) {
       return respondDataError(res, error);
     }
@@ -1079,6 +1321,18 @@ function buildApp({ db, jwtSecret, adminWebDir }) {
 
   app.get('/admin/label-templates', adminWebAuth, (_req, res) => {
     res.sendFile(path.join(webRoot, 'label-templates.html'));
+  });
+
+  app.get('/admin/audit-logs', adminWebAuth, (_req, res) => {
+    res.sendFile(path.join(webRoot, 'audit-logs.html'));
+  });
+
+  app.get('/admin/admins', adminWebAuth, (_req, res) => {
+    res.sendFile(path.join(webRoot, 'admins.html'));
+  });
+
+  app.get('/admin/waste', adminWebAuth, (_req, res) => {
+    res.sendFile(path.join(webRoot, 'waste.html'));
   });
 
   app.get('/', (_req, res) => {

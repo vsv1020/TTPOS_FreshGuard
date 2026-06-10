@@ -143,6 +143,8 @@ function buildInspectionRoutes({ db, adminAuth, storeAuth }) {
         storeId: req.query.storeId,
         status: req.query.status,
         severity: req.query.severity,
+        // P2-4: overdue=true keeps only issues past due_date and not closed.
+        overdue: req.query.overdue === 'true',
         q: req.query.q,
       };
       if (hasLimit) {
@@ -169,6 +171,7 @@ function buildInspectionRoutes({ db, adminAuth, storeAuth }) {
         description: req.body?.description,
         severity: req.body?.severity,
         assignedTo: req.body?.assignedTo,
+        assignee: req.body?.assignee,
         dueDate: req.body?.dueDate,
       });
       recordAudit(db, {
@@ -185,16 +188,40 @@ function buildInspectionRoutes({ db, adminAuth, storeAuth }) {
     } catch (e) { respondError(res, e); }
   });
 
+  // P2-4: accepts { assignee?, dueDate?, status? } (camelCase contract) plus
+  // the legacy snake_case fields. Status flow is validated in updateIssue
+  // (illegal transition -> 400).
   router.patch('/admin/inspection/issues/:id', adminAuth, async (req, res) => {
     try {
-      const issue = await updateIssue(db, req.params.id, req.body);
+      const updates = { ...req.body };
+      if (updates.dueDate !== undefined) {
+        const raw = updates.dueDate;
+        delete updates.dueDate;
+        if (raw == null || String(raw).trim() === '') {
+          updates.due_date = null;
+        } else if (Number.isNaN(Date.parse(String(raw)))) {
+          return res.status(400).json({ error: 'dueDate must be an ISO date' });
+        } else {
+          updates.due_date = String(raw).trim();
+        }
+      }
+      if (updates.assignee !== undefined) {
+        updates.assignee = updates.assignee == null || String(updates.assignee).trim() === ''
+          ? null
+          : String(updates.assignee).trim();
+      }
+      const issue = await updateIssue(db, req.params.id, updates);
+      const detailParts = [issue.title];
+      if (updates.status !== undefined) detailParts.push(`status=${issue.status}`);
+      if (updates.assignee !== undefined) detailParts.push(`assignee=${issue.assignee || ''}`);
+      if (updates.due_date !== undefined) detailParts.push(`dueDate=${issue.due_date || ''}`);
       recordAudit(db, {
         actorType: 'admin',
         actorId: req.admin?.email,
         action: 'issue.update',
         targetType: 'issue',
         targetId: issue.id,
-        detail: issue.title,
+        detail: detailParts.join(' '),
         ip: req.ip || null,
         brandId: await getStoreBrandId(issue.store_id),
       }).catch(() => {});

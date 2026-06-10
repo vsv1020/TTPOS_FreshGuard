@@ -153,6 +153,14 @@ async function initInspectionSchema(db) {
     await db.run('ALTER TABLE inspection_results ADD COLUMN max_score_snapshot INTEGER');
   }
 
+  // P2-4: free-text assignee on issues (the legacy assigned_to INTEGER FK is
+  // kept untouched for backward compatibility). due_date already exists.
+  const issueCols = await db.all('PRAGMA table_info(issues)');
+  const issueColNames = new Set(issueCols.map(c => c.name));
+  if (!issueColNames.has('assignee')) {
+    await db.run('ALTER TABLE issues ADD COLUMN assignee TEXT');
+  }
+
   // Idempotent indexes for the common list/dashboard query paths.
   // Created after the migrations above so they survive the table-recreate path.
   await db.exec(`
@@ -390,21 +398,60 @@ async function getInspection(db, id) {
 
 // ─── Issues ──────────────────────────────────────────────
 
-async function createIssue(db, { inspectionId, storeId, title, description, severity, assignedTo, dueDate }) {
+// P2-4 status flow note: the contract's "open" maps to the pre-existing
+// 'pending' status value (the API accepts 'open' as an input alias).
+// Transitions only move forward along
+//   pending(open) -> in_progress -> resolved -> closed
+// Skipping ahead is allowed (e.g. pending -> resolved); moving backward or
+// reopening is not (400). Setting the same status again is a no-op.
+const ISSUE_STATUS_FLOW = ['pending', 'in_progress', 'resolved', 'closed'];
+
+function normalizeIssueStatus(status) {
+  const normalized = String(status || '').trim().toLowerCase();
+  const mapped = normalized === 'open' ? 'pending' : normalized;
+  if (!ISSUE_STATUS_FLOW.includes(mapped)) {
+    throw new Error(`status must be one of open, ${ISSUE_STATUS_FLOW.join(', ')}`);
+  }
+  return mapped;
+}
+
+function assertIssueStatusTransition(fromStatus, toStatus) {
+  if (fromStatus === toStatus) return;
+  if (ISSUE_STATUS_FLOW.indexOf(toStatus) <= ISSUE_STATUS_FLOW.indexOf(fromStatus)) {
+    throw new Error(`illegal status transition: ${fromStatus} -> ${toStatus}`);
+  }
+}
+
+// Overdue = past due_date and not yet resolved/closed (computed at query time).
+const ISSUE_OVERDUE_SQL = `(issues.due_date IS NOT NULL
+  AND datetime(issues.due_date) < datetime('now')
+  AND issues.status NOT IN ('resolved', 'closed'))`;
+
+async function createIssue(db, { inspectionId, storeId, title, description, severity, assignedTo, assignee, dueDate }) {
   if (!storeId || !title) throw new Error('storeId and title are required');
   const result = await db.run(
-    `INSERT INTO issues (inspection_id, store_id, title, description, severity, assigned_to, due_date)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    [inspectionId || null, storeId, title, description || null, severity || 'medium', assignedTo || null, dueDate || null]
+    `INSERT INTO issues (inspection_id, store_id, title, description, severity, assigned_to, assignee, due_date)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    [inspectionId || null, storeId, title, description || null, severity || 'medium', assignedTo || null, assignee || null, dueDate || null]
   );
   return db.get('SELECT * FROM issues WHERE id = ?', [result.lastID]);
 }
 
 async function updateIssue(db, id, updates) {
+  const existing = await db.get('SELECT * FROM issues WHERE id = ?', [id]);
+  if (!existing) throw new Error('Issue not found');
+
+  const normalized = { ...updates };
+  if (normalized.status !== undefined) {
+    const nextStatus = normalizeIssueStatus(normalized.status);
+    assertIssueStatusTransition(existing.status, nextStatus);
+    normalized.status = nextStatus;
+  }
+
   const fields = [];
   const values = [];
-  for (const [key, val] of Object.entries(updates)) {
-    if (['status', 'assigned_to', 'due_date', 'resolution_note', 'severity'].includes(key) && val !== undefined) {
+  for (const [key, val] of Object.entries(normalized)) {
+    if (['status', 'assignee', 'assigned_to', 'due_date', 'resolution_note', 'severity'].includes(key) && val !== undefined) {
       fields.push(`${key} = ?`);
       values.push(val);
     }
@@ -416,23 +463,26 @@ async function updateIssue(db, id, updates) {
   return db.get('SELECT * FROM issues WHERE id = ?', [id]);
 }
 
-async function listIssues(db, { storeId, status, severity, q, limit = 50, offset = 0, includeTotal = false } = {}) {
+async function listIssues(db, { storeId, status, severity, overdue, q, limit = 50, offset = 0, includeTotal = false } = {}) {
   let where = `FROM issues
              LEFT JOIN stores s ON issues.store_id = s.id
              WHERE 1=1`;
   const params = [];
   if (storeId) { where += ' AND issues.store_id = ?'; params.push(storeId); }
-  if (status) { where += ' AND issues.status = ?'; params.push(status); }
+  if (status) { where += ' AND issues.status = ?'; params.push(normalizeIssueStatus(status)); }
   if (severity) { where += ' AND issues.severity = ?'; params.push(severity); }
+  if (overdue) { where += ` AND ${ISSUE_OVERDUE_SQL}`; }
   if (q != null && String(q).trim()) {
     where += ' AND (issues.title LIKE ? OR issues.description LIKE ? OR s.name LIKE ?)';
     const like = `%${String(q).trim()}%`;
     params.push(like, like, like);
   }
-  const sql = `SELECT issues.*, s.name as store_name
+  const sql = `SELECT issues.*, s.name as store_name,
+             CASE WHEN ${ISSUE_OVERDUE_SQL} THEN 1 ELSE 0 END AS overdue
              ${where}
              ORDER BY issues.created_at DESC LIMIT ? OFFSET ?`;
-  const items = await db.all(sql, [...params, limit, offset]);
+  const rows = await db.all(sql, [...params, limit, offset]);
+  const items = rows.map((row) => ({ ...row, overdue: row.overdue === 1 }));
   if (!includeTotal) return items;
   const totalRow = await db.get(`SELECT COUNT(*) as c ${where}`, params);
   return { items, total: Number(totalRow?.c || 0), limit, offset };

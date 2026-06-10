@@ -18,6 +18,11 @@ const {
 const { initInspectionSchema, listInspections } = require('./inspection-db');
 const { buildInspectionRoutes } = require('./inspection-routes');
 const {
+  buildDailyComplianceReport,
+  buildMonthlyComplianceReport,
+  buildWeeklyComplianceReport
+} = require('./compliance');
+const {
   PRODUCT_CSV_FIELDS,
   clearPinFailures,
   consumeBindingCode,
@@ -32,6 +37,7 @@ const {
   deactivateStoreStaff,
   deleteLabelTemplate,
   deleteProduct,
+  getBrandPromoRules,
   getBrandReminderConfig,
   getDashboardSummary,
   getInspectionScoreTrend,
@@ -41,6 +47,7 @@ const {
   getProductById,
   getStoreBatchByBarcode,
   getStoreById,
+  getStoreDashboardRanking,
   getStoreExpiryRanking,
   getStoreStaffById,
   getUserByEmail,
@@ -67,6 +74,7 @@ const {
   renderStoreBatchLabel,
   resetAdminAccountPassword,
   updateAdminAccount,
+  updateBrandPromoRules,
   updateBrandReminderConfig,
   updateLabelTemplate,
   updateProduct,
@@ -396,6 +404,44 @@ function buildApp({ db, jwtSecret, adminWebDir }) {
     }
   });
 
+  // P2-3: brand-level near-expiry promo rules. Same brand-scope contract as
+  // reminder-config; rules are applied to /api/store/reminders at query time.
+  app.get('/api/admin/brands/:id/promo-rules', adminApiAuth, async (req, res) => {
+    try {
+      if (req.admin.brandId != null && Number(req.params.id) !== req.admin.brandId) {
+        return res.status(403).json({ error: 'Forbidden' });
+      }
+      const promoRules = await getBrandPromoRules(db, req.params.id);
+      return res.json(promoRules);
+    } catch (error) {
+      return respondDataError(res, error);
+    }
+  });
+
+  app.put('/api/admin/brands/:id/promo-rules', adminApiAuth, async (req, res) => {
+    try {
+      if (req.admin.brandId != null && Number(req.params.id) !== req.admin.brandId) {
+        return res.status(403).json({ error: 'Forbidden' });
+      }
+      const promoRules = await updateBrandPromoRules(db, req.params.id, {
+        rules: req.body?.rules
+      });
+      recordAudit(db, {
+        actorType: 'admin',
+        actorId: req.admin.email,
+        action: 'brand.promo-rules.update',
+        targetType: 'brand',
+        targetId: promoRules.brandId,
+        detail: JSON.stringify(promoRules.rules),
+        ip: req.ip,
+        brandId: promoRules.brandId
+      });
+      return res.json(promoRules);
+    } catch (error) {
+      return respondDataError(res, error);
+    }
+  });
+
   app.get('/api/admin/stores', adminApiAuth, async (req, res) => {
     const brandId = req.admin.brandId != null ? req.admin.brandId : undefined;
     const stores = await listStores(db, { brandId });
@@ -581,7 +627,8 @@ function buildApp({ db, jwtSecret, adminWebDir }) {
         allergens: req.body?.allergens,
         storageConditions: req.body?.storageConditions,
         openedShelfLifeHours: req.body?.openedShelfLifeHours,
-        costPrice: req.body?.costPrice
+        costPrice: req.body?.costPrice,
+        colorCode: req.body?.colorCode
       });
       recordAudit(db, {
         actorType: 'admin',
@@ -619,7 +666,8 @@ function buildApp({ db, jwtSecret, adminWebDir }) {
         allergens: req.body?.allergens,
         storageConditions: req.body?.storageConditions,
         openedShelfLifeHours: req.body?.openedShelfLifeHours,
-        costPrice: req.body?.costPrice
+        costPrice: req.body?.costPrice,
+        colorCode: req.body?.colorCode
       });
       recordAudit(db, {
         actorType: 'admin',
@@ -900,11 +948,21 @@ function buildApp({ db, jwtSecret, adminWebDir }) {
   });
 
   // ─── Feature B: Dashboard aggregation ───────────────────────────────────
+  // P2-5 drilldown: every endpoint accepts from/to/brandId/storeId. Brand
+  // admins are always narrowed to their own brand (query brandId ignored).
+
+  function resolveDashboardScope(req) {
+    return {
+      brandId: req.admin.brandId != null ? req.admin.brandId : (req.query.brandId || undefined),
+      storeId: req.query.storeId,
+      from: req.query.from,
+      to: req.query.to
+    };
+  }
 
   app.get('/api/admin/dashboard/summary', adminApiAuth, async (req, res) => {
     try {
-      const brandId = req.admin.brandId != null ? req.admin.brandId : undefined;
-      const summary = await getDashboardSummary(db, { brandId });
+      const summary = await getDashboardSummary(db, resolveDashboardScope(req));
       return res.json({ summary });
     } catch (error) {
       return respondDataError(res, error);
@@ -913,9 +971,8 @@ function buildApp({ db, jwtSecret, adminWebDir }) {
 
   app.get('/api/admin/dashboard/ranking', adminApiAuth, async (req, res) => {
     try {
-      const brandId = req.admin.brandId != null ? req.admin.brandId : undefined;
       const ranking = await getStoreExpiryRanking(db, {
-        brandId,
+        ...resolveDashboardScope(req),
         limit: req.query.limit ? Number(req.query.limit) : undefined
       });
       return res.json({ ranking });
@@ -926,9 +983,8 @@ function buildApp({ db, jwtSecret, adminWebDir }) {
 
   app.get('/api/admin/dashboard/loss-trend', adminApiAuth, async (req, res) => {
     try {
-      const brandId = req.admin.brandId != null ? req.admin.brandId : undefined;
       const trend = await getLossTrend(db, {
-        brandId,
+        ...resolveDashboardScope(req),
         days: req.query.days ? Number(req.query.days) : undefined
       });
       return res.json({ trend });
@@ -939,12 +995,74 @@ function buildApp({ db, jwtSecret, adminWebDir }) {
 
   app.get('/api/admin/dashboard/score-trend', adminApiAuth, async (req, res) => {
     try {
-      const brandId = req.admin.brandId != null ? req.admin.brandId : undefined;
       const trend = await getInspectionScoreTrend(db, {
-        brandId,
+        ...resolveDashboardScope(req),
         days: req.query.days ? Number(req.query.days) : undefined
       });
       return res.json({ trend });
+    } catch (error) {
+      return respondDataError(res, error);
+    }
+  });
+
+  // P2-5: per-store ranking (handleRate / wasteRate / avgInspectionScore /
+  // openIssues / overdueIssues). Brand admins are auto-narrowed.
+  app.get('/api/admin/dashboard/store-ranking', adminApiAuth, async (req, res) => {
+    try {
+      const brandId = req.admin.brandId != null ? req.admin.brandId : (req.query.brandId || undefined);
+      const items = await getStoreDashboardRanking(db, {
+        brandId,
+        from: req.query.from,
+        to: req.query.to
+      });
+      return res.json({ items });
+    } catch (error) {
+      return respondDataError(res, error);
+    }
+  });
+
+  // ─── P2-1: 「日管控·周排查·月调度」compliance reports ─────────────────────
+  // Generated live for regulators (中文 copy); brand admins are auto-narrowed,
+  // and a requested storeId must be inside the admin's brand scope.
+  async function resolveComplianceScope(req, res) {
+    const brandId = req.admin.brandId != null ? req.admin.brandId : (req.query.brandId || undefined);
+    let storeId;
+    if (req.query.storeId != null && req.query.storeId !== '') {
+      const store = await assertStoreInScope(req, res, req.query.storeId);
+      if (!store) return null;
+      storeId = store.id;
+    }
+    return { brandId, storeId };
+  }
+
+  app.get('/api/admin/compliance/daily', adminApiAuth, async (req, res) => {
+    try {
+      const scope = await resolveComplianceScope(req, res);
+      if (!scope) return undefined;
+      const report = await buildDailyComplianceReport(db, { date: req.query.date, ...scope });
+      return res.json(report);
+    } catch (error) {
+      return respondDataError(res, error);
+    }
+  });
+
+  app.get('/api/admin/compliance/weekly', adminApiAuth, async (req, res) => {
+    try {
+      const scope = await resolveComplianceScope(req, res);
+      if (!scope) return undefined;
+      const report = await buildWeeklyComplianceReport(db, { weekStart: req.query.weekStart, ...scope });
+      return res.json(report);
+    } catch (error) {
+      return respondDataError(res, error);
+    }
+  });
+
+  app.get('/api/admin/compliance/monthly', adminApiAuth, async (req, res) => {
+    try {
+      const scope = await resolveComplianceScope(req, res);
+      if (!scope) return undefined;
+      const report = await buildMonthlyComplianceReport(db, { month: req.query.month, ...scope });
+      return res.json(report);
     } catch (error) {
       return respondDataError(res, error);
     }
@@ -1333,6 +1451,10 @@ function buildApp({ db, jwtSecret, adminWebDir }) {
 
   app.get('/admin/waste', adminWebAuth, (_req, res) => {
     res.sendFile(path.join(webRoot, 'waste.html'));
+  });
+
+  app.get('/admin/compliance', adminWebAuth, (_req, res) => {
+    res.sendFile(path.join(webRoot, 'compliance.html'));
   });
 
   app.get('/', (_req, res) => {

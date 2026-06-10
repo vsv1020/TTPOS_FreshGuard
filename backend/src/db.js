@@ -5,7 +5,22 @@ const { open } = require('sqlite');
 
 const LABEL_LANGUAGE_SINGLE = 'single';
 const LABEL_LANGUAGE_BILINGUAL = 'bilingual';
-const HANDLING_REASONS = ['discarded', 'sold', 'transferred'];
+// 'discounted' (P2-3): the unit was moved to a near-expiry promotion and sold.
+const HANDLING_REASONS = ['discarded', 'sold', 'transferred', 'discounted'];
+
+// P2-3: promo rule actions applied to expiring reminders (brand-level config).
+const PROMO_ACTIONS = ['discount', 'remove'];
+
+// P2-2: four-color coding (中国后厨色标规范). Thermal printing is monochrome,
+// so labels carry the color as a text marker (colorLabel); real color blocks
+// are rendered by the app/admin UI.
+const PRODUCT_COLOR_CODES = ['red', 'blue', 'green', 'yellow'];
+const PRODUCT_COLOR_LABELS = {
+  red: '红·畜肉禽类',
+  blue: '蓝·水产',
+  green: '绿·果蔬',
+  yellow: '黄·熟食半成品'
+};
 
 const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS users (
@@ -98,7 +113,7 @@ CREATE TABLE IF NOT EXISTS handling_logs (
   reminder_id INTEGER NOT NULL,
   store_id INTEGER NOT NULL,
   product_id INTEGER NOT NULL,
-  reason TEXT NOT NULL CHECK (reason IN ('discarded', 'sold', 'transferred')),
+  reason TEXT NOT NULL CHECK (reason IN ('discarded', 'sold', 'transferred', 'discounted')),
   note TEXT,
   handled_at TEXT NOT NULL,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -210,6 +225,21 @@ function likeParam(q) {
   return `%${String(q).trim()}%`;
 }
 
+function normalizeColorCode(value) {
+  const normalized = String(value == null ? '' : value).trim().toLowerCase();
+  if (!normalized) {
+    return null;
+  }
+  if (!PRODUCT_COLOR_CODES.includes(normalized)) {
+    throw new Error('colorCode must be red, blue, green, or yellow');
+  }
+  return normalized;
+}
+
+function colorCodeLabel(colorCode) {
+  return colorCode ? PRODUCT_COLOR_LABELS[colorCode] || null : null;
+}
+
 function normalizeLabelLanguage(labelLanguage) {
   const value = String(labelLanguage || LABEL_LANGUAGE_SINGLE).trim().toLowerCase();
   if (value !== LABEL_LANGUAGE_SINGLE && value !== LABEL_LANGUAGE_BILINGUAL) {
@@ -237,7 +267,8 @@ function renderLabelTemplate({
   allergens,
   storageConditions,
   barcodeData,
-  opened
+  opened,
+  colorLabel
 }) {
   // Clear multi-line label layout closer to a real printed shelf-life label.
   // The leading keyed lines (Store / Product / Batch ID / Languages) are kept
@@ -264,6 +295,10 @@ function renderLabelTemplate({
   const storageText = String(storageConditions || '').trim();
   if (storageText) {
     lines.push(`存储: ${storageText}`);
+  }
+  // P2-2: monochrome thermal label — the color shows as a text marker.
+  if (colorLabel) {
+    lines.push(`色标: ${colorLabel}`);
   }
 
   lines.push('------------------------');
@@ -357,6 +392,10 @@ async function createDb(filename) {
   if (!productColNames.has('cost_price')) {
     await db.exec('ALTER TABLE products ADD COLUMN cost_price REAL');
   }
+  // P2-2: four-color coding (red/blue/green/yellow), nullable.
+  if (!productColNames.has('color_code')) {
+    await db.exec('ALTER TABLE products ADD COLUMN color_code TEXT');
+  }
 
   // Idempotent migration: add barcode_data and note to batches/reminders for traceability + PAO.
   const batchColumns = await db.all('PRAGMA table_info(batches)');
@@ -384,6 +423,49 @@ async function createDb(filename) {
   const brandColumns = await db.all('PRAGMA table_info(brands)');
   if (!brandColumns.some((col) => col.name === 'reminder_threshold_days')) {
     await db.exec('ALTER TABLE brands ADD COLUMN reminder_threshold_days INTEGER');
+  }
+
+  // P2-3: brand-level promo rules (JSON array, see normalizePromoRules).
+  if (!brandColumns.some((col) => col.name === 'promo_rules')) {
+    await db.exec('ALTER TABLE brands ADD COLUMN promo_rules TEXT');
+  }
+
+  // P2-3 idempotent migration: existing databases were created with a CHECK
+  // that excludes the new 'discounted' handling reason. SQLite cannot alter a
+  // CHECK constraint, so rebuild the table once (detected via sqlite_master).
+  const handlingLogsDdl = await db.get(
+    `SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'handling_logs'`
+  );
+  if (handlingLogsDdl && !String(handlingLogsDdl.sql).includes('discounted')) {
+    const oldCols = (await db.all('PRAGMA table_info(handling_logs)'))
+      .map((col) => col.name)
+      .join(', ');
+    await db.exec('PRAGMA foreign_keys = OFF');
+    await db.exec('BEGIN TRANSACTION');
+    await db.exec('ALTER TABLE handling_logs RENAME TO _handling_logs_old');
+    await db.exec(`
+      CREATE TABLE handling_logs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        reminder_id INTEGER NOT NULL,
+        store_id INTEGER NOT NULL,
+        product_id INTEGER NOT NULL,
+        reason TEXT NOT NULL CHECK (reason IN ('discarded', 'sold', 'transferred', 'discounted')),
+        note TEXT,
+        handled_at TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        staff_id INTEGER,
+        FOREIGN KEY (reminder_id) REFERENCES reminders(id) ON DELETE CASCADE,
+        FOREIGN KEY (store_id) REFERENCES stores(id) ON DELETE CASCADE,
+        FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE
+      )
+    `);
+    await db.exec(`INSERT INTO handling_logs (${oldCols}) SELECT ${oldCols} FROM _handling_logs_old`);
+    await db.exec('DROP TABLE _handling_logs_old');
+    await db.exec('COMMIT');
+    await db.exec('PRAGMA foreign_keys = ON');
+    // The rename+drop above took the old table's indexes with it.
+    await db.exec('CREATE INDEX IF NOT EXISTS idx_handling_logs_store_handled ON handling_logs(store_id, handled_at)');
+    await db.exec('CREATE INDEX IF NOT EXISTS idx_handling_logs_reminder ON handling_logs(reminder_id)');
   }
 
   // Idempotent migration: brand scope on audit logs so brand admins only read
@@ -937,6 +1019,7 @@ async function getProductById(db, productId) {
             p.storage_conditions AS storageConditions,
             p.opened_shelf_life_hours AS openedShelfLifeHours,
             p.cost_price AS costPrice,
+            p.color_code AS colorCode,
             p.is_active AS isActive,
             p.created_at AS createdAt,
             p.updated_at AS updatedAt
@@ -982,7 +1065,8 @@ async function createProduct(
     allergens,
     storageConditions,
     openedShelfLifeHours,
-    costPrice
+    costPrice,
+    colorCode
   }
 ) {
   const normalizedBrandId = requirePositiveInteger(brandId, 'brandId');
@@ -1011,6 +1095,7 @@ async function createProduct(
   const normalizedStorageConditions = String(storageConditions || '').trim() || null;
   const normalizedOpenedShelfLifeHours = normalizeOpenedShelfLifeHours(openedShelfLifeHours);
   const normalizedCostPrice = normalizeCostPrice(costPrice);
+  const normalizedColorCode = normalizeColorCode(colorCode);
 
   const brand = await getBrandById(db, normalizedBrandId);
   if (!brand) {
@@ -1029,8 +1114,9 @@ async function createProduct(
       allergens,
       storage_conditions,
       opened_shelf_life_hours,
-      cost_price
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      cost_price,
+      color_code
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     normalizedBrandId,
     normalizedName,
     normalizedSku,
@@ -1041,7 +1127,8 @@ async function createProduct(
     normalizedAllergens,
     normalizedStorageConditions,
     normalizedOpenedShelfLifeHours,
-    normalizedCostPrice
+    normalizedCostPrice,
+    normalizedColorCode
   );
 
   return getProductById(db, result.lastID);
@@ -1057,7 +1144,8 @@ const PRODUCT_UPDATE_COLUMN_MAP = {
   allergens: 'allergens',
   storageConditions: 'storage_conditions',
   openedShelfLifeHours: 'opened_shelf_life_hours',
-  costPrice: 'cost_price'
+  costPrice: 'cost_price',
+  colorCode: 'color_code'
 };
 
 async function updateProduct(db, productId, fields = {}) {
@@ -1105,6 +1193,8 @@ async function updateProduct(db, productId, fields = {}) {
       value = normalizeOpenedShelfLifeHours(rawValue);
     } else if (key === 'costPrice') {
       value = normalizeCostPrice(rawValue);
+    } else if (key === 'colorCode') {
+      value = normalizeColorCode(rawValue);
     }
 
     assignments.push(`${column} = ?`);
@@ -1186,6 +1276,7 @@ async function listProducts(db, { brandId, includeInactive = false, q, limit, of
             p.storage_conditions AS storageConditions,
             p.opened_shelf_life_hours AS openedShelfLifeHours,
             p.cost_price AS costPrice,
+            p.color_code AS colorCode,
             p.is_active AS isActive,
             p.created_at AS createdAt,
             p.updated_at AS updatedAt
@@ -1287,7 +1378,8 @@ const PRODUCT_CSV_FIELDS = [
   'allergens',
   'storageConditions',
   'openedShelfLifeHours',
-  'costPrice'
+  'costPrice',
+  'colorCode'
 ];
 
 // Upsert key (per the products schema's UNIQUE(brand_id, sku) and
@@ -1389,7 +1481,8 @@ async function importProductsCsv(db, { csv, brandId } = {}) {
             allergens: cell('allergens') || null,
             storageConditions: cell('storageConditions') || null,
             openedShelfLifeHours: cell('openedShelfLifeHours') || null,
-            costPrice: cell('costPrice') || null
+            costPrice: cell('costPrice') || null,
+            colorCode: cell('colorCode') || null
           });
           inserted += 1;
         }
@@ -1494,6 +1587,8 @@ async function createBatchWithReminders(db, { storeId, productId, quantity, prin
       allergens: product.allergens,
       storageConditions: product.storageConditions,
       barcodeData: batch.barcodeData,
+      colorCode: product.colorCode || null,
+      colorLabel: colorCodeLabel(product.colorCode),
       staffId: normalizedStaffId
     };
 
@@ -1521,6 +1616,114 @@ async function createBatchWithReminders(db, { storeId, productId, quantity, prin
   }
 }
 
+// ─── P2-3: near-expiry promo rules (brand-level, applied at query time) ───────
+// Rules are stored sorted by hoursBeforeExpiry descending and applied in that
+// order; the matching rule with the smallest hoursBeforeExpiry that still
+// covers the remaining time wins (命中最近一档). Already-expired reminders fall
+// into the tightest tier.
+
+function normalizePromoRules(rules) {
+  if (!Array.isArray(rules)) {
+    throw new Error('rules must be an array');
+  }
+  const normalized = rules.map((rule) => {
+    const hours = Number(rule?.hoursBeforeExpiry);
+    if (!Number.isFinite(hours) || hours <= 0) {
+      throw new Error('hoursBeforeExpiry must be a positive number');
+    }
+    const action = String(rule?.action || '').trim().toLowerCase();
+    if (!PROMO_ACTIONS.includes(action)) {
+      throw new Error('action must be discount or remove');
+    }
+    const entry = { hoursBeforeExpiry: hours, action };
+    if (action === 'discount') {
+      const percent = Number(rule?.discountPercent);
+      if (!Number.isFinite(percent) || percent <= 0 || percent >= 100) {
+        throw new Error('discountPercent must be a number between 0 and 100 (exclusive) for discount rules');
+      }
+      entry.discountPercent = percent;
+    } else if (rule?.discountPercent != null) {
+      throw new Error('discountPercent is only valid for discount rules');
+    }
+    return entry;
+  });
+  const seen = new Set();
+  for (const rule of normalized) {
+    if (seen.has(rule.hoursBeforeExpiry)) {
+      throw new Error('duplicate hoursBeforeExpiry in rules');
+    }
+    seen.add(rule.hoursBeforeExpiry);
+  }
+  return normalized.sort((a, b) => b.hoursBeforeExpiry - a.hoursBeforeExpiry);
+}
+
+function parsePromoRules(json) {
+  if (!json) {
+    return [];
+  }
+  try {
+    const parsed = JSON.parse(json);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+// Returns null or { action, hoursBeforeExpiry, discountPercent? } for the rule
+// hit by the remaining time until expiresAt (computed at query time, not stored).
+function computeReminderPromo(rules, expiresAt, nowMs = Date.now()) {
+  if (!rules || rules.length === 0) {
+    return null;
+  }
+  const expiresMs = Date.parse(expiresAt);
+  if (Number.isNaN(expiresMs)) {
+    return null;
+  }
+  const hoursLeft = (expiresMs - nowMs) / (60 * 60 * 1000);
+  let matched = null;
+  for (const rule of rules) {
+    // rules are sorted descending, so the last hit is the tightest tier.
+    if (hoursLeft <= rule.hoursBeforeExpiry) {
+      matched = rule;
+    }
+  }
+  if (!matched) {
+    return null;
+  }
+  const promo = { action: matched.action, hoursBeforeExpiry: matched.hoursBeforeExpiry };
+  if (matched.discountPercent != null) {
+    promo.discountPercent = matched.discountPercent;
+  }
+  return promo;
+}
+
+async function getBrandPromoRules(db, brandId) {
+  const normalizedBrandId = requirePositiveInteger(brandId, 'brandId');
+  const row = await db.get(
+    'SELECT id, promo_rules AS promoRules FROM brands WHERE id = ?',
+    normalizedBrandId
+  );
+  if (!row) {
+    throw new Error('brandId not found');
+  }
+  return { brandId: row.id, rules: parsePromoRules(row.promoRules) };
+}
+
+async function updateBrandPromoRules(db, brandId, { rules } = {}) {
+  const normalizedBrandId = requirePositiveInteger(brandId, 'brandId');
+  const brand = await getBrandById(db, normalizedBrandId);
+  if (!brand) {
+    throw new Error('brandId not found');
+  }
+  const normalizedRules = normalizePromoRules(rules);
+  await db.run(
+    'UPDATE brands SET promo_rules = ? WHERE id = ?',
+    normalizedRules.length > 0 ? JSON.stringify(normalizedRules) : null,
+    normalizedBrandId
+  );
+  return { brandId: normalizedBrandId, rules: normalizedRules };
+}
+
 function normalizeReminderStatus(status) {
   const normalized = String(status || 'expiring').trim().toLowerCase();
   if (normalized !== 'expiring' && normalized !== 'expired' && normalized !== 'all') {
@@ -1533,18 +1736,22 @@ async function listStoreReminders(db, { storeId, status = 'expiring', thresholdD
   const normalizedStoreId = requirePositiveInteger(storeId, 'storeId');
   const normalizedStatus = normalizeReminderStatus(status);
 
+  // Brand-level config: expiring threshold fallback + P2-3 promo rules.
+  const brandConfigRow = await db.get(
+    `SELECT b.reminder_threshold_days AS thresholdDays,
+            b.promo_rules AS promoRules
+     FROM stores s
+     JOIN brands b ON b.id = s.brand_id
+     WHERE s.id = ?`,
+    normalizedStoreId
+  );
+  const promoRules = parsePromoRules(brandConfigRow?.promoRules);
+
   // When no explicit threshold is given, fall back to the brand-level reminder
   // config (reminder_threshold_days), then to the historical default of 1 day.
   let effectiveThresholdDays = thresholdDays;
   if (effectiveThresholdDays == null || effectiveThresholdDays === '') {
-    const configRow = await db.get(
-      `SELECT b.reminder_threshold_days AS thresholdDays
-       FROM stores s
-       JOIN brands b ON b.id = s.brand_id
-       WHERE s.id = ?`,
-      normalizedStoreId
-    );
-    effectiveThresholdDays = configRow?.thresholdDays != null ? configRow.thresholdDays : 1;
+    effectiveThresholdDays = brandConfigRow?.thresholdDays != null ? brandConfigRow.thresholdDays : 1;
   }
   const normalizedThresholdDays = Number(effectiveThresholdDays);
 
@@ -1596,7 +1803,13 @@ async function listStoreReminders(db, { storeId, status = 'expiring', thresholdD
      ${fromSql}
      ORDER BY datetime(r.expires_at) ASC, r.id ASC`;
 
-  const toReminder = (row) => ({ ...row, is_priority: row.is_priority === 1 });
+  // P2-3: promo is computed from the remaining time at query time (not stored).
+  const promoNowMs = Date.now();
+  const toReminder = (row) => ({
+    ...row,
+    is_priority: row.is_priority === 1,
+    promo: computeReminderPromo(promoRules, row.expiresAt, promoNowMs)
+  });
 
   const pagination = normalizePagination({ limit, offset });
   if (!pagination) {
@@ -1628,7 +1841,7 @@ async function handleReminder(db, { storeId, reminderId, reason, note, staffId }
   const normalizedNote = String(note || '').trim() || null;
 
   if (!HANDLING_REASONS.includes(normalizedReason)) {
-    throw new Error('reason must be one of discarded, sold, transferred');
+    throw new Error('reason must be one of discarded, sold, transferred, discounted');
   }
 
   const normalizedStaffId = await assertStoreStaff(db, normalizedStoreId, staffId);
@@ -1782,6 +1995,8 @@ async function openReminder(db, { storeId, reminderId, staffId }) {
       allergens: product.allergens,
       storageConditions: product.storageConditions,
       barcodeData: batch ? batch.barcodeData : null,
+      colorCode: product.colorCode || null,
+      colorLabel: colorCodeLabel(product.colorCode),
       opened: true,
       staffId: normalizedStaffId
     };
@@ -1914,6 +2129,8 @@ async function renderStoreBatchLabel(db, { storeId, batchId }) {
     allergens: product.allergens,
     storageConditions: product.storageConditions,
     barcodeData: batch.barcodeData,
+    colorCode: product.colorCode || null,
+    colorLabel: colorCodeLabel(product.colorCode),
     staffId: batch.printedByStaffId != null ? batch.printedByStaffId : null
   };
 
@@ -2390,7 +2607,13 @@ function buildLabelTemplateFields(label) {
     barcode: label.barcodeData,
     allergens: label.allergens,
     storage: label.storageConditions,
-    opened: label.opened ? 'OPENED' : ''
+    opened: label.opened ? 'OPENED' : '',
+    // The admin template editor documents {{color_label}}/{{color_code}}
+    // (snake_case, matching the other fields); {{colorLabel}} is kept as a
+    // legacy alias for templates authored before the docs existed.
+    colorLabel: label.colorLabel || '',
+    color_label: label.colorLabel || '',
+    color_code: label.colorCode || ''
   };
 }
 
@@ -2404,9 +2627,30 @@ function brandScopeClause(brandId, alias, params) {
   return `AND ${alias}.brand_id = ?`;
 }
 
-async function getDashboardSummary(db, { brandId } = {}) {
+// P2-5 drilldown: normalizes optional from/to/storeId filters shared by the
+// dashboard aggregation functions. Defaults (null) keep each query's
+// historical window.
+function normalizeDashboardFilters({ storeId, from, to } = {}) {
+  return {
+    storeId: storeId != null && storeId !== '' ? requirePositiveInteger(storeId, 'storeId') : null,
+    from: from != null && String(from).trim() ? String(from).trim() : null,
+    to: to != null && String(to).trim() ? String(to).trim() : null
+  };
+}
+
+function storeIdClause(storeId, alias, params) {
+  if (storeId == null) {
+    return '';
+  }
+  params.push(storeId);
+  return `AND ${alias}.id = ?`;
+}
+
+async function getDashboardSummary(db, { brandId, storeId, from, to } = {}) {
+  const filters = normalizeDashboardFilters({ storeId, from, to });
   const storeParams = [];
   const storeScope = brandScopeClause(brandId, 's', storeParams);
+  const storeIdScope = storeIdClause(filters.storeId, 's', storeParams);
 
   const brandCountRow = brandId == null
     ? await db.get('SELECT COUNT(*) AS c FROM brands')
@@ -2416,16 +2660,22 @@ async function getDashboardSummary(db, { brandId } = {}) {
   const productScope = brandScopeClause(brandId, 'p', productParams);
   const countsRow = await db.get(
     `SELECT
-        (SELECT COUNT(*) FROM stores s WHERE 1=1 ${storeScope}) AS storeCount,
+        (SELECT COUNT(*) FROM stores s WHERE 1=1 ${storeScope} ${storeIdScope}) AS storeCount,
         (SELECT COUNT(*) FROM products p WHERE 1=1 ${productScope}) AS productCount`,
     ...storeParams,
     ...productParams
   );
 
-  // Single pass over the relevant reminders (pending ones plus the last 30 days)
+  // handledRate window: defaults to the historical "last 30 days up to now";
+  // from/to (ISO) override either bound.
+  const rateStart = filters.from || addDaysIso(nowIso(), -30);
+  const rateEnd = filters.to || nowIso();
+
+  // Single pass over the relevant reminders (pending ones plus the rate window)
   // instead of three separate COUNT scans.
-  const reminderParams = [];
+  const reminderParams = [rateStart, rateEnd, rateStart, rateEnd, rateStart];
   const reminderScope = brandScopeClause(brandId, 's', reminderParams);
+  const reminderStoreScope = storeIdClause(filters.storeId, 's', reminderParams);
   const reminderRow = await db.get(
     `SELECT
         SUM(CASE WHEN r.handled_at IS NULL
@@ -2433,15 +2683,15 @@ async function getDashboardSummary(db, { brandId } = {}) {
                  AND datetime(r.expires_at) <= datetime('now', '+1 day') THEN 1 ELSE 0 END) AS todayExpiring,
         SUM(CASE WHEN r.handled_at IS NULL
                  AND datetime(r.expires_at) < datetime('now') THEN 1 ELSE 0 END) AS unhandledExpired,
-        SUM(CASE WHEN datetime(r.expires_at) >= datetime('now', '-30 day')
-                 AND datetime(r.expires_at) < datetime('now') THEN 1 ELSE 0 END) AS rateTotal,
-        SUM(CASE WHEN datetime(r.expires_at) >= datetime('now', '-30 day')
-                 AND datetime(r.expires_at) < datetime('now')
+        SUM(CASE WHEN datetime(r.expires_at) >= datetime(?)
+                 AND datetime(r.expires_at) <= datetime(?) THEN 1 ELSE 0 END) AS rateTotal,
+        SUM(CASE WHEN datetime(r.expires_at) >= datetime(?)
+                 AND datetime(r.expires_at) <= datetime(?)
                  AND r.handled_at IS NOT NULL THEN 1 ELSE 0 END) AS rateHandled
      FROM reminders r
      JOIN stores s ON s.id = r.store_id
-     WHERE (r.handled_at IS NULL OR datetime(r.expires_at) >= datetime('now', '-30 day'))
-       ${reminderScope}`,
+     WHERE (r.handled_at IS NULL OR datetime(r.expires_at) >= datetime(?))
+       ${reminderScope} ${reminderStoreScope}`,
     ...reminderParams
   );
 
@@ -2459,11 +2709,32 @@ async function getDashboardSummary(db, { brandId } = {}) {
   };
 }
 
-async function getStoreExpiryRanking(db, { brandId, limit = 10 } = {}) {
-  const params = [];
-  const scope = brandScopeClause(brandId, 's', params);
+async function getStoreExpiryRanking(db, { brandId, storeId, from, to, limit = 10 } = {}) {
+  const filters = normalizeDashboardFilters({ storeId, from, to });
+
+  // Default window: unhandled reminders expiring within the next day.
+  // With from/to, the window becomes [from, to] on expires_at instead.
+  const joinParams = [];
+  let windowSql;
+  if (filters.from || filters.to) {
+    const clauses = [];
+    if (filters.from) {
+      clauses.push('datetime(r.expires_at) >= datetime(?)');
+      joinParams.push(filters.from);
+    }
+    if (filters.to) {
+      clauses.push('datetime(r.expires_at) <= datetime(?)');
+      joinParams.push(filters.to);
+    }
+    windowSql = clauses.join('\n       AND ');
+  } else {
+    windowSql = `datetime(r.expires_at) <= datetime('now', '+1 day')`;
+  }
+
+  const whereParams = [];
+  const scope = brandScopeClause(brandId, 's', whereParams);
+  const storeScope = storeIdClause(filters.storeId, 's', whereParams);
   const normalizedLimit = Number.isInteger(Number(limit)) && Number(limit) > 0 ? Number(limit) : 10;
-  params.push(normalizedLimit);
   return db.all(
     `SELECT s.id AS storeId,
             s.name AS storeName,
@@ -2471,39 +2742,65 @@ async function getStoreExpiryRanking(db, { brandId, limit = 10 } = {}) {
      FROM stores s
      LEFT JOIN reminders r ON r.store_id = s.id
        AND r.handled_at IS NULL
-       AND datetime(r.expires_at) <= datetime('now', '+1 day')
-     WHERE 1=1 ${scope}
+       AND ${windowSql}
+     WHERE 1=1 ${scope} ${storeScope}
      GROUP BY s.id
      ORDER BY count DESC, s.id ASC
      LIMIT ?`,
-    ...params
+    ...joinParams,
+    ...whereParams,
+    normalizedLimit
   );
 }
 
-async function getLossTrend(db, { brandId, days = 30 } = {}) {
+// Builds the date-window clause for a trend query: [from, to] when given,
+// otherwise the historical "last N days" default.
+function trendWindowClause(dateExpr, { from, to, days }, params) {
+  const clauses = [];
+  if (from || to) {
+    if (from) {
+      clauses.push(`datetime(${dateExpr}) >= datetime(?)`);
+      params.push(from);
+    }
+    if (to) {
+      clauses.push(`datetime(${dateExpr}) <= datetime(?)`);
+      params.push(to);
+    }
+  } else {
+    clauses.push(`datetime(${dateExpr}) >= datetime('now', ?)`);
+    params.push(`-${days} day`);
+  }
+  return clauses.map((clause) => `AND ${clause}`).join('\n       ');
+}
+
+async function getLossTrend(db, { brandId, storeId, from, to, days = 30 } = {}) {
+  const filters = normalizeDashboardFilters({ storeId, from, to });
   const normalizedDays = Number.isInteger(Number(days)) && Number(days) > 0 ? Number(days) : 30;
   const params = [];
   const scope = brandScopeClause(brandId, 's', params);
-  params.push(`-${normalizedDays} day`);
+  const storeScope = storeIdClause(filters.storeId, 's', params);
+  const windowSql = trendWindowClause('r.expires_at', { ...filters, days: normalizedDays }, params);
   return db.all(
     `SELECT date(r.expires_at) AS date,
             SUM(CASE WHEN datetime(r.expires_at) < datetime('now') THEN 1 ELSE 0 END) AS expired,
             SUM(CASE WHEN datetime(r.expires_at) < datetime('now') AND r.handled_at IS NOT NULL THEN 1 ELSE 0 END) AS handled
      FROM reminders r
      JOIN stores s ON s.id = r.store_id
-     WHERE 1=1 ${scope}
-       AND datetime(r.expires_at) >= datetime('now', ?)
+     WHERE 1=1 ${scope} ${storeScope}
+       ${windowSql}
      GROUP BY date(r.expires_at)
      ORDER BY date(r.expires_at) ASC`,
     ...params
   );
 }
 
-async function getInspectionScoreTrend(db, { brandId, days = 30 } = {}) {
+async function getInspectionScoreTrend(db, { brandId, storeId, from, to, days = 30 } = {}) {
+  const filters = normalizeDashboardFilters({ storeId, from, to });
   const normalizedDays = Number.isInteger(Number(days)) && Number(days) > 0 ? Number(days) : 30;
   const params = [];
   const scope = brandScopeClause(brandId, 's', params);
-  params.push(`-${normalizedDays} day`);
+  const storeScope = storeIdClause(filters.storeId, 's', params);
+  const windowSql = trendWindowClause('COALESCE(i.completed_at, i.created_at)', { ...filters, days: normalizedDays }, params);
   return db.all(
     `SELECT date(COALESCE(i.completed_at, i.created_at)) AS date,
             AVG(
@@ -2516,12 +2813,136 @@ async function getInspectionScoreTrend(db, { brandId, days = 30 } = {}) {
             COUNT(*) AS count
      FROM inspections i
      JOIN stores s ON s.id = i.store_id
-     WHERE 1=1 ${scope}
-       AND datetime(COALESCE(i.completed_at, i.created_at)) >= datetime('now', ?)
+     WHERE 1=1 ${scope} ${storeScope}
+       ${windowSql}
      GROUP BY date(COALESCE(i.completed_at, i.created_at))
      ORDER BY date(COALESCE(i.completed_at, i.created_at)) ASC`,
     ...params
   );
+}
+
+// ─── P2-5: store ranking drilldown ────────────────────────────────────────────
+// One row per store in scope:
+//   handleRate         = handled reminders / total reminders (expires_at in window)
+//   wasteRate          = same口径 as the waste report: distinct batches with a
+//                        'discarded' handling log (handled in window) / batches
+//                        printed in window
+//   avgInspectionScore = AVG score percentage of inspections in window (null
+//                        when the store has none)
+//   openIssues         = issues not yet resolved/closed
+//   overdueIssues      = open issues whose due_date is in the past
+async function getStoreDashboardRanking(db, { brandId, from, to } = {}) {
+  const filters = normalizeDashboardFilters({ from, to });
+
+  const buildQuery = (sql, dateColumn) => {
+    const params = [];
+    const scope = brandScopeClause(brandId, 's', params);
+    let windowSql = '';
+    if (dateColumn) {
+      if (filters.from) {
+        windowSql += `\n       AND datetime(${dateColumn}) >= datetime(?)`;
+        params.push(filters.from);
+      }
+      if (filters.to) {
+        windowSql += `\n       AND datetime(${dateColumn}) <= datetime(?)`;
+        params.push(filters.to);
+      }
+    }
+    return db.all(sql.replace('__SCOPE__', scope).replace('__WINDOW__', windowSql), ...params);
+  };
+
+  const stores = await buildQuery(
+    `SELECT s.id AS storeId, s.name AS storeName
+     FROM stores s
+     WHERE 1=1 __SCOPE__ __WINDOW__
+     ORDER BY s.id ASC`,
+    null
+  );
+
+  const reminderRows = await buildQuery(
+    `SELECT r.store_id AS storeId,
+            COUNT(*) AS total,
+            SUM(CASE WHEN r.handled_at IS NOT NULL THEN 1 ELSE 0 END) AS handled
+     FROM reminders r
+     JOIN stores s ON s.id = r.store_id
+     WHERE 1=1 __SCOPE__ __WINDOW__
+     GROUP BY r.store_id`,
+    'r.expires_at'
+  );
+
+  const batchRows = await buildQuery(
+    `SELECT b.store_id AS storeId, COUNT(*) AS totalBatches
+     FROM batches b
+     JOIN stores s ON s.id = b.store_id
+     WHERE 1=1 __SCOPE__ __WINDOW__
+     GROUP BY b.store_id`,
+    'b.printed_at'
+  );
+
+  const discardRows = await buildQuery(
+    `SELECT hl.store_id AS storeId, COUNT(DISTINCT r.batch_id) AS discardedCount
+     FROM handling_logs hl
+     JOIN reminders r ON r.id = hl.reminder_id
+     JOIN stores s ON s.id = hl.store_id
+     WHERE hl.reason = 'discarded' __SCOPE__ __WINDOW__
+     GROUP BY hl.store_id`,
+    'hl.handled_at'
+  );
+
+  const inspectionRows = await buildQuery(
+    `SELECT i.store_id AS storeId,
+            AVG(
+              CASE
+                WHEN i.score_pct IS NOT NULL THEN i.score_pct
+                WHEN i.max_score > 0 THEN (i.total_score * 100.0 / i.max_score)
+                ELSE NULL
+              END
+            ) AS avgScore
+     FROM inspections i
+     JOIN stores s ON s.id = i.store_id
+     WHERE 1=1 __SCOPE__ __WINDOW__
+     GROUP BY i.store_id`,
+    'COALESCE(i.completed_at, i.created_at)'
+  );
+
+  const issueRows = await buildQuery(
+    `SELECT issues.store_id AS storeId,
+            SUM(CASE WHEN issues.status NOT IN ('resolved', 'closed') THEN 1 ELSE 0 END) AS openIssues,
+            SUM(CASE WHEN issues.status NOT IN ('resolved', 'closed')
+                     AND issues.due_date IS NOT NULL
+                     AND datetime(issues.due_date) < datetime('now') THEN 1 ELSE 0 END) AS overdueIssues
+     FROM issues
+     JOIN stores s ON s.id = issues.store_id
+     WHERE 1=1 __SCOPE__ __WINDOW__
+     GROUP BY issues.store_id`,
+    null
+  );
+
+  const indexBy = (rows) => new Map(rows.map((row) => [row.storeId, row]));
+  const reminders = indexBy(reminderRows);
+  const batches = indexBy(batchRows);
+  const discards = indexBy(discardRows);
+  const inspections = indexBy(inspectionRows);
+  const issues = indexBy(issueRows);
+
+  return stores.map((store) => {
+    const reminder = reminders.get(store.storeId);
+    const total = Number(reminder?.total || 0);
+    const handled = Number(reminder?.handled || 0);
+    const totalBatches = Number(batches.get(store.storeId)?.totalBatches || 0);
+    const discardedCount = Number(discards.get(store.storeId)?.discardedCount || 0);
+    const avgScore = inspections.get(store.storeId)?.avgScore;
+    const issueRow = issues.get(store.storeId);
+    return {
+      storeId: store.storeId,
+      storeName: store.storeName,
+      handleRate: total > 0 ? handled / total : 0,
+      wasteRate: totalBatches > 0 ? discardedCount / totalBatches : 0,
+      avgInspectionScore: avgScore != null ? Math.round(avgScore * 10) / 10 : null,
+      openIssues: Number(issueRow?.openIssues || 0),
+      overdueIssues: Number(issueRow?.overdueIssues || 0)
+    };
+  });
 }
 
 // ─── P1-3: waste dashboard report ─────────────────────────────────────────────
@@ -2937,6 +3358,8 @@ module.exports = {
   HANDLING_REASONS,
   LABEL_LANGUAGE_BILINGUAL,
   LABEL_LANGUAGE_SINGLE,
+  PRODUCT_COLOR_CODES,
+  PRODUCT_COLOR_LABELS,
   PRODUCT_CSV_FIELDS,
   clearPinFailures,
   closeDb,
@@ -2955,6 +3378,7 @@ module.exports = {
   deleteProduct,
   ensureAdminUser,
   getAdminAccountById,
+  getBrandPromoRules,
   getBrandReminderConfig,
   getDashboardSummary,
   getDefaultLabelTemplate,
@@ -2965,6 +3389,7 @@ module.exports = {
   getProductById,
   getStoreBatchByBarcode,
   getStoreById,
+  getStoreDashboardRanking,
   getStoreExpiryRanking,
   getStoreStaffById,
   getUserByEmail,
@@ -2993,6 +3418,7 @@ module.exports = {
   renderStoreBatchLabel,
   runReminderScan,
   updateAdminAccount,
+  updateBrandPromoRules,
   updateBrandReminderConfig,
   updateLabelTemplate,
   updateProduct,

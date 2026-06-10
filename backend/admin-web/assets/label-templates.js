@@ -1,5 +1,5 @@
 (function () {
-  const { requestJson, setPageMessage, esc, bindLogout } = window.AdminCommon;
+  const { requestJson, setPageMessage, esc, bindLogout, createListControls, unwrapList } = window.AdminCommon;
 
   const templateForm = document.getElementById('template-form');
   const brandSelect = document.getElementById('template-brand');
@@ -12,6 +12,13 @@
   const editCancelBtn = document.getElementById('edit-cancel-btn');
 
   let selectedId = null;
+  let currentTemplates = [];
+
+  const templateListControls = createListControls({
+    container: 'templates-controls',
+    searchPlaceholder: 'Search templates (name / brand)...',
+    onChange: () => loadTemplates().catch((err) => setPageMessage(err.message, true))
+  });
 
   // Sample fields used for live preview
   const SAMPLE_FIELDS = {
@@ -42,9 +49,12 @@
   }
 
   async function loadTemplates() {
-    const data = await requestJson('/api/admin/label-templates');
+    const data = await requestJson(`/api/admin/label-templates?${templateListControls.queryString()}`);
     if (!data) return;
-    const rows = (data.templates || [])
+    const { items, total } = unwrapList(data, 'templates');
+    currentTemplates = items;
+    templateListControls.update({ total, count: items.length });
+    const rows = items
       .map(
         (t) => `<tr data-id="${esc(t.id)}">
           <td>${esc(t.id)}</td>
@@ -159,9 +169,7 @@
     }
 
     if (action === 'edit') {
-      const data = await requestJson('/api/admin/label-templates');
-      if (!data) return;
-      const t = (data.templates || []).find((x) => String(x.id) === String(id));
+      const t = currentTemplates.find((x) => String(x.id) === String(id));
       if (t) openEditModal(t);
       return;
     }

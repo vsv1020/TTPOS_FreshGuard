@@ -14,6 +14,7 @@
         <a class="active" href="/admin/binding">Binding</a>
         <a href="/admin/products">Products</a>
         <a href="/admin/report">Report</a>
+        <a href="/admin/audit-logs">Audit</a>
       </nav>
       <button id="logout-btn" type="button">Log Out</button>
     </header>
@@ -46,8 +47,19 @@
         <p class="hint">One-time code for store device activation (no staff login).</p>
       </section>
 
+      <section class="panel">
+        <h2>Brand Reminder Config</h2>
+        <form id="reminder-config-form" class="stack">
+          <select id="reminder-config-brand" required></select>
+          <input id="reminder-threshold-days" type="number" min="0" step="1" placeholder="Expiry warning threshold (days)" required />
+          <button type="submit">Save Reminder Config</button>
+        </form>
+        <p id="reminder-config-hint" class="hint"></p>
+      </section>
+
       <section class="panel wide">
         <h2>Binding Codes</h2>
+        <div id="binding-controls"></div>
         <table>
           <thead>
             <tr>

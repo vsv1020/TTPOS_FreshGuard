@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>FreshGuard Admin - Audit Logs</title>
+    <link rel="stylesheet" href="/admin/assets/styles.css" />
+  </head>
+  <body class="dashboard-page">
+    <header class="topbar">
+      <h1>FreshGuard Admin</h1>
+      <nav class="topnav">
+        <a href="/admin/dashboard">Dashboard</a>
+        <a href="/admin/binding">Binding</a>
+        <a href="/admin/products">Products</a>
+        <a href="/admin/staff">Staff</a>
+        <a href="/admin/label-templates">Labels</a>
+        <a href="/admin/report">Report</a>
+        <a class="active" href="/admin/audit-logs">Audit</a>
+      </nav>
+      <button id="logout-btn" type="button">Log Out</button>
+    </header>
+
+    <main class="dashboard-grid">
+      <section class="panel wide">
+        <h2>Audit Logs</h2>
+        <form id="audit-filter-form" class="filter-row">
+          <input id="audit-actor" placeholder="Actor (email / staff id)" />
+          <select id="audit-action">
+            <option value="">All actions</option>
+          </select>
+          <input id="audit-from" type="date" title="From date" />
+          <input id="audit-to" type="date" title="To date" />
+          <button type="submit">Apply Filters</button>
+        </form>
+        <div id="audit-controls"></div>
+        <table>
+          <thead>
+            <tr>
+              <th>Time</th>
+              <th>Actor Type</th>
+              <th>Actor</th>
+              <th>Action</th>
+              <th>Target</th>
+              <th>Detail</th>
+              <th>IP</th>
+            </tr>
+          </thead>
+          <tbody id="audit-table"></tbody>
+        </table>
+      </section>
+    </main>
+
+    <p id="page-message" class="page-message"></p>
+
+    <script src="/admin/assets/common.js"></script>
+    <script src="/admin/assets/audit-logs.js"></script>
+  </body>
+</html>

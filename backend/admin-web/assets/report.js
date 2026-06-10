@@ -2,6 +2,12 @@ const tableBody = document.getElementById('report-table');
 const refreshButton = document.getElementById('refresh-report');
 const exportCsvBtn = document.getElementById('export-csv-btn');
 
+const reportListControls = window.AdminCommon.createListControls({
+  container: 'report-controls',
+  searchPlaceholder: 'Search store / product...',
+  onChange: () => loadReport()
+});
+
 function renderRows(rows) {
   const sortedRows = [...rows].sort(
     (a, b) => Number(b.expiredUnhandledCount) - Number(a.expiredUnhandledCount)
@@ -28,11 +34,15 @@ function renderRows(rows) {
 async function loadReport() {
   try {
     window.AdminCommon.setPageMessage('');
-    const report = await window.AdminCommon.requestJson('/api/admin/reports/expired-handling');
+    const report = await window.AdminCommon.requestJson(
+      `/api/admin/reports/expired-handling?${reportListControls.queryString()}`
+    );
     if (!report) {
       return;
     }
-    renderRows(report.rows);
+    const { items, total } = window.AdminCommon.unwrapList(report, 'rows');
+    renderRows(items);
+    reportListControls.update({ total, count: items.length });
   } catch (error) {
     window.AdminCommon.setPageMessage(error.message, true);
   }
@@ -41,7 +51,11 @@ async function loadReport() {
 async function exportCsv() {
   try {
     window.AdminCommon.setPageMessage('');
-    const response = await fetch('/api/admin/reports/expired-handling?format=csv', {
+    const csvParams = new URLSearchParams({ format: 'csv' });
+    if (reportListControls.state.q) {
+      csvParams.set('q', reportListControls.state.q);
+    }
+    const response = await fetch(`/api/admin/reports/expired-handling?${csvParams.toString()}`, {
       credentials: 'include'
     });
 

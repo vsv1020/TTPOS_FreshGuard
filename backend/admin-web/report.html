@@ -14,6 +14,7 @@
         <a href="/admin/binding">Binding</a>
         <a href="/admin/products">Products</a>
         <a class="active" href="/admin/report">Report</a>
+        <a href="/admin/audit-logs">Audit</a>
       </nav>
       <button id="logout-btn" type="button">Log Out</button>
     </header>
@@ -22,8 +23,11 @@
       <section class="panel wide">
         <h2>Unhandled Expired by Store -> Product</h2>
         <p class="hint">Rows are grouped by store and product. Unhandled expired count is the key metric for follow-up.</p>
-        <button id="refresh-report" type="button">Refresh</button>
-        <button id="export-csv-btn" type="button" style="background:#0369a1;margin-left:8px;">Export CSV</button>
+        <div class="filter-row">
+          <button id="refresh-report" type="button">Refresh</button>
+          <button id="export-csv-btn" type="button" style="background:#0369a1;">Export CSV</button>
+        </div>
+        <div id="report-controls"></div>
         <table>
           <thead>
             <tr>

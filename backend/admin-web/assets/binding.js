@@ -4,13 +4,29 @@ const bindingForm = document.getElementById('binding-form');
 const brandSelect = document.getElementById('store-brand');
 const storeSelect = document.getElementById('binding-store');
 const bindingTable = document.getElementById('binding-table');
+const reminderConfigForm = document.getElementById('reminder-config-form');
+const reminderBrandSelect = document.getElementById('reminder-config-brand');
+const reminderThresholdInput = document.getElementById('reminder-threshold-days');
+const reminderConfigHint = document.getElementById('reminder-config-hint');
 
 let brands = [];
 let stores = [];
 
+const bindingListControls = window.AdminCommon.createListControls({
+  container: 'binding-controls',
+  searchPlaceholder: 'Search codes (code / brand / store)...',
+  onChange: () => loadBindingCodes().catch((error) => window.AdminCommon.setPageMessage(error.message, true))
+});
+
 function renderBrandSelect() {
   const esc = window.AdminCommon.esc;
-  brandSelect.innerHTML = brands.map((brand) => `<option value="${esc(brand.id)}">${esc(brand.name)}</option>`).join('');
+  const options = brands.map((brand) => `<option value="${esc(brand.id)}">${esc(brand.name)}</option>`).join('');
+  brandSelect.innerHTML = options;
+  const previous = reminderBrandSelect.value;
+  reminderBrandSelect.innerHTML = options;
+  if (previous && brands.some((brand) => String(brand.id) === previous)) {
+    reminderBrandSelect.value = previous;
+  }
 }
 
 function renderStoreSelect() {
@@ -47,19 +63,54 @@ function renderBindingTable(codes) {
     .join('');
 }
 
+async function loadBindingCodes() {
+  const res = await window.AdminCommon.requestJson(`/api/admin/binding-codes?${bindingListControls.queryString()}`);
+  if (!res) {
+    return;
+  }
+  const { items, total } = window.AdminCommon.unwrapList(res, 'bindingCodes');
+  renderBindingTable(items);
+  bindingListControls.update({ total, count: items.length });
+}
+
+async function loadReminderConfig() {
+  const brandId = Number(reminderBrandSelect.value);
+  if (!brandId) {
+    reminderThresholdInput.value = '';
+    reminderConfigHint.textContent = '';
+    return;
+  }
+
+  try {
+    const data = await window.AdminCommon.requestJson(`/api/admin/brands/${brandId}/reminder-config`);
+    if (!data) {
+      return;
+    }
+    const config = data.reminderConfig || data.config || data;
+    reminderThresholdInput.value = config.thresholdDays != null ? config.thresholdDays : '';
+    reminderConfigHint.textContent = 'Days before expiry that batches show up as expiring reminders.';
+  } catch (error) {
+    reminderThresholdInput.value = '';
+    reminderConfigHint.textContent = `Could not load reminder config: ${error.message}`;
+  }
+}
+
 async function loadAll() {
-  const [brandRes, storeRes, codeRes] = await Promise.all([
+  const [brandRes, storeRes] = await Promise.all([
     window.AdminCommon.requestJson('/api/admin/brands'),
-    window.AdminCommon.requestJson('/api/admin/stores'),
-    window.AdminCommon.requestJson('/api/admin/binding-codes')
+    window.AdminCommon.requestJson('/api/admin/stores')
   ]);
+
+  if (!brandRes || !storeRes) {
+    return;
+  }
 
   brands = brandRes.brands;
   stores = storeRes.stores;
 
   renderBrandSelect();
   renderStoreSelect();
-  renderBindingTable(codeRes.bindingCodes);
+  await Promise.all([loadBindingCodes(), loadReminderConfig()]);
 }
 
 brandForm.addEventListener('submit', async (event) => {
@@ -112,11 +163,33 @@ bindingForm.addEventListener('submit', async (event) => {
       method: 'POST',
       body: JSON.stringify({ storeId, expiresInHours })
     });
-    await loadAll();
+    await loadBindingCodes();
     window.AdminCommon.setPageMessage('Binding code generated.');
   } catch (error) {
     window.AdminCommon.setPageMessage(error.message, true);
   }
+});
+
+reminderConfigForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  window.AdminCommon.setPageMessage('');
+
+  const brandId = Number(reminderBrandSelect.value);
+  const thresholdDays = Number(reminderThresholdInput.value);
+
+  try {
+    await window.AdminCommon.requestJson(`/api/admin/brands/${brandId}/reminder-config`, {
+      method: 'PUT',
+      body: JSON.stringify({ thresholdDays })
+    });
+    window.AdminCommon.setPageMessage('Reminder config saved.');
+  } catch (error) {
+    window.AdminCommon.setPageMessage(error.message, true);
+  }
+});
+
+reminderBrandSelect.addEventListener('change', () => {
+  loadReminderConfig().catch((error) => window.AdminCommon.setPageMessage(error.message, true));
 });
 
 window.AdminCommon.bindLogout();

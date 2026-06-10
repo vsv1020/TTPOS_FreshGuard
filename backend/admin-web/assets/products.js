@@ -18,7 +18,14 @@ const editCancelBtn = document.getElementById('edit-cancel-btn');
 
 let brands = [];
 let stores = [];
+let currentProducts = [];
 const LANGUAGE_OPTIONS = ['en', 'es', 'fr', 'zh'];
+
+const productListControls = window.AdminCommon.createListControls({
+  container: 'products-controls',
+  searchPlaceholder: 'Search products (name / SKU)...',
+  onChange: () => loadProducts().catch((error) => window.AdminCommon.setPageMessage(error.message, true))
+});
 
 function renderBrandSelect() {
   const esc = window.AdminCommon.esc;
@@ -152,19 +159,33 @@ function closeEditModal() {
   editProductForm.reset();
 }
 
+async function loadProducts() {
+  const res = await window.AdminCommon.requestJson(`/api/admin/products?${productListControls.queryString()}`);
+  if (!res) {
+    return;
+  }
+  const { items, total } = window.AdminCommon.unwrapList(res, 'products');
+  currentProducts = items;
+  renderProducts(items);
+  productListControls.update({ total, count: items.length });
+}
+
 async function loadAll() {
-  const [brandRes, storeRes, productsRes] = await Promise.all([
+  const [brandRes, storeRes] = await Promise.all([
     window.AdminCommon.requestJson('/api/admin/brands'),
-    window.AdminCommon.requestJson('/api/admin/stores'),
-    window.AdminCommon.requestJson('/api/admin/products')
+    window.AdminCommon.requestJson('/api/admin/stores')
   ]);
+
+  if (!brandRes || !storeRes) {
+    return;
+  }
 
   brands = brandRes.brands;
   stores = storeRes.stores;
 
   renderBrandSelect();
   renderStoreSelect();
-  renderProducts(productsRes.products);
+  await loadProducts();
 }
 
 productForm.addEventListener('submit', async (event) => {
@@ -193,7 +214,7 @@ productForm.addEventListener('submit', async (event) => {
     primaryLanguageSelect.value = 'en';
     secondaryLanguageSelect.value = '';
     syncSecondaryLanguageRequired();
-    await loadAll();
+    await loadProducts();
     window.AdminCommon.setPageMessage('Product created.');
   } catch (error) {
     window.AdminCommon.setPageMessage(error.message, true);
@@ -224,7 +245,7 @@ editProductForm.addEventListener('submit', async (event) => {
       body: JSON.stringify(payload)
     });
     closeEditModal();
-    await loadAll();
+    await loadProducts();
     window.AdminCommon.setPageMessage('Product updated.');
   } catch (error) {
     window.AdminCommon.setPageMessage(error.message, true);
@@ -241,11 +262,7 @@ productsTable.addEventListener('click', async (event) => {
   const action = btn.dataset.action;
 
   if (action === 'edit') {
-    const res = await window.AdminCommon.requestJson('/api/admin/products');
-    if (!res) {
-      return;
-    }
-    const product = res.products.find((p) => String(p.id) === String(id));
+    const product = currentProducts.find((p) => String(p.id) === String(id));
     if (product) {
       openEditModal(product);
     }
@@ -259,7 +276,7 @@ productsTable.addEventListener('click', async (event) => {
     window.AdminCommon.setPageMessage('');
     try {
       await window.AdminCommon.requestJson(`/api/admin/products/${id}`, { method: 'DELETE' });
-      await loadAll();
+      await loadProducts();
       window.AdminCommon.setPageMessage('Product deleted.');
     } catch (error) {
       window.AdminCommon.setPageMessage(error.message, true);

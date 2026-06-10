@@ -194,6 +194,86 @@ void main() {
     expect(label.opened, isFalse);
   });
 
+  // ── Color-code marker tests ───────────────────────────────────────────────
+
+  test('buildLabel TSPL prints color marker text when colorLabel is set', () {
+    final data = LabelData(
+      productName: 'Beef',
+      storeName: 'Store A',
+      printedAt: '2026-06-10T00:00:00Z',
+      expiresAt: '2026-06-12T00:00:00Z',
+      barcodeData: 'FG-9-1-1',
+      colorCode: 'red',
+      colorLabel: '红·畜肉禽类',
+    );
+
+    final command = utf8.decode(
+      LabelCommandBuilder.buildLabel(profile: PrinterProfile.tspl, data: data),
+    );
+
+    expect(command, contains('【红·畜肉禽类】'));
+  });
+
+  test('buildLabel CPCL falls back to colorCode mapping without colorLabel', () {
+    final data = LabelData(
+      productName: 'Fish',
+      storeName: 'Store B',
+      printedAt: '2026-06-10T00:00:00Z',
+      expiresAt: '2026-06-11T00:00:00Z',
+      barcodeData: 'FG-9-2-2',
+      colorCode: 'blue',
+    );
+
+    final command = utf8.decode(
+      LabelCommandBuilder.buildLabel(profile: PrinterProfile.cpcl, data: data),
+    );
+
+    expect(command, contains('【蓝·水产】'));
+  });
+
+  test('buildLabel omits color marker for legacy data without color fields', () {
+    final data = LabelData(
+      productName: 'Plain',
+      storeName: 'Store C',
+      printedAt: '2026-06-10T00:00:00Z',
+      expiresAt: '2026-06-11T00:00:00Z',
+      barcodeData: 'FG-9-3-3',
+    );
+
+    for (final profile in PrinterProfile.values) {
+      final command = utf8.decode(
+        LabelCommandBuilder.buildLabel(profile: profile, data: data),
+      );
+      expect(command, isNot(contains('【')));
+    }
+  });
+
+  test('LabelData.fromBackend parses colorCode and colorLabel', () {
+    final label = LabelData.fromBackend(<String, dynamic>{
+      'productName': 'Beef',
+      'storeName': 'Store',
+      'printedAt': '2026-06-10T00:00:00Z',
+      'expiresAt': '2026-06-12T00:00:00Z',
+      'barcodeData': 'FG-9-4-4',
+      'colorCode': 'red',
+      'colorLabel': '红·畜肉禽类',
+    });
+
+    expect(label.colorCode, 'red');
+    expect(label.colorLabel, '红·畜肉禽类');
+
+    final legacy = LabelData.fromBackend(<String, dynamic>{
+      'productName': 'Old',
+      'storeName': 'Store',
+      'printedAt': '2026-06-10T00:00:00Z',
+      'expiresAt': '2026-06-12T00:00:00Z',
+      'barcodeData': 'FG-9-5-5',
+    });
+
+    expect(legacy.colorCode, isNull);
+    expect(legacy.colorLabel, isNull);
+  });
+
   // ── Existing serialization test ───────────────────────────────────────────
 
   test('USB device key and settings serialization are stable', () {

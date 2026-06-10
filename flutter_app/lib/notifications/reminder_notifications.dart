@@ -8,6 +8,7 @@ class ExpiryNotice {
     required this.id,
     required this.title,
     required this.expiresAt,
+    this.promoText,
   });
 
   final int id;
@@ -15,6 +16,19 @@ class ExpiryNotice {
 
   /// Expiry instant in UTC.
   final DateTime expiresAt;
+
+  /// Optional promo suggestion (e.g. 「建议打折 20%」) appended to the body.
+  final String? promoText;
+}
+
+/// Notification body for [notice]; appends the promo suggestion when present.
+String expiryNoticeBody(ExpiryNotice notice) {
+  final base = 'Batch expires at ${notice.expiresAt.toLocal()}';
+  final promo = notice.promoText;
+  if (promo == null || promo.isEmpty) {
+    return base;
+  }
+  return '$base（$promo）';
 }
 
 /// Parses a server timestamp. Naive timestamps (no `Z`/offset) are treated
@@ -125,7 +139,7 @@ class ReminderNotificationService {
         await _plugin.zonedSchedule(
           id: notice.id,
           title: 'Expiring soon: ${notice.title}',
-          body: 'Batch expires at ${notice.expiresAt.toLocal()}',
+          body: expiryNoticeBody(notice),
           scheduledDate: tz.TZDateTime.from(when, tz.UTC),
           notificationDetails: _details,
           androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,

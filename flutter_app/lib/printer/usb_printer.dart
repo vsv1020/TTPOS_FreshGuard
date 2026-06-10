@@ -3,6 +3,8 @@ import 'dart:typed_data';
 
 import 'package:flutter/services.dart';
 
+import '../color_codes.dart';
+
 const _usbPrinterChannelName = 'freshguard/usb_printer';
 
 enum PrinterProfile { tspl, cpcl }
@@ -184,6 +186,8 @@ class LabelData {
     this.opened = false,
     this.templateBody,
     this.fields,
+    this.colorCode,
+    this.colorLabel,
   });
 
   final String productName;
@@ -200,6 +204,12 @@ class LabelData {
   final String? templateBody;
   /// Structured fields map returned by the backend alongside templateBody.
   final Map<String, dynamic>? fields;
+
+  /// 四色色标 code ('red'|'blue'|'green'|'yellow'); null for legacy data.
+  final String? colorCode;
+
+  /// 中文色标名（如「红·畜肉禽类」），打印为文字标记。
+  final String? colorLabel;
 
   factory LabelData.fromBackend(Map<String, dynamic> label) {
     final rawLangs = label['languages'];
@@ -226,6 +236,8 @@ class LabelData {
       opened: label['opened'] == true,
       templateBody: label['templateBody']?.toString(),
       fields: fields,
+      colorCode: label['colorCode']?.toString(),
+      colorLabel: label['colorLabel']?.toString(),
     );
   }
 }
@@ -275,6 +287,16 @@ class LabelCommandBuilder {
     if (data.opened) {
       buffer.writeln('TEXT 20,$y,"2",0,1,1,"** OPENED / 已开封 **"');
       y += 30;
+    }
+
+    // 四色色标 marker (monochrome thermal: rendered as text, e.g.【红·畜肉禽类】)
+    final colorMark = colorCodePrintMark(
+      colorLabel: data.colorLabel,
+      colorCode: data.colorCode,
+    );
+    if (colorMark != null) {
+      buffer.writeln('TEXT 20,$y,"2",0,1,1,"${_escapeQuoted(colorMark)}"');
+      y += 26;
     }
 
     // Product name – larger font (font "3", scale 2×2)
@@ -334,6 +356,16 @@ class LabelCommandBuilder {
     if (data.opened) {
       buffer.writeln('TEXT 0 3 10 $y "** OPENED / 已开封 **"');
       y += 28;
+    }
+
+    // 四色色标 marker (monochrome thermal: rendered as text, e.g.【红·畜肉禽类】)
+    final colorMark = colorCodePrintMark(
+      colorLabel: data.colorLabel,
+      colorCode: data.colorCode,
+    );
+    if (colorMark != null) {
+      buffer.writeln('TEXT 0 3 10 $y "${_escapeQuoted(colorMark)}"');
+      y += 24;
     }
 
     // Product name – larger font (font 4 = larger in CPCL)

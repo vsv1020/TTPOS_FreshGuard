@@ -7,9 +7,11 @@ import 'package:hive_flutter/hive_flutter.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'color_codes.dart';
 import 'network.dart';
 import 'notifications/reminder_notifications.dart';
 import 'paging.dart';
+import 'promo.dart';
 import 'printer/usb_printer.dart';
 import 'printing/offline_print_queue.dart';
 import 'printing/print_queue.dart';
@@ -549,6 +551,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         id: reminder.id,
         title: reminder.productName,
         expiresAt: expiresAt,
+        promoText: reminder.promo != null ? promoSummaryZh(reminder.promo!) : null,
       ));
     }
     // Fire and forget; the service is best-effort and never throws.
@@ -746,8 +749,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
       if (!mounted) {
         return;
       }
+      final raw = error.toString().replaceFirst('Exception: ', '');
       setState(() {
-        _message = error.toString().replaceFirst('Exception: ', '');
+        // Older servers may reject the 'discounted' action; explain why.
+        _message = reason == 'discounted'
+            ? '转促销售出失败（服务端可能暂不支持该动作）: $raw'
+            : raw;
       });
     } finally {
       if (mounted) {
@@ -1288,6 +1295,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
         ..._products.map(
           (item) => Card(
             child: ListTile(
+              leading: item.colorCode != null
+                  ? ColorCodeDot(colorCode: item.colorCode, size: 14)
+                  : null,
               title: Text(item.name),
               subtitle: Text(
                 'SKU: ${item.sku ?? '-'} | Shelf life: ${item.shelfLifeDays} day(s) | Label: ${item.labelLanguage}',
@@ -1387,10 +1397,18 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       children: [
                         Row(
                           children: [
+                            if (reminder.colorCode != null) ...[
+                              ColorCodeDot(colorCode: reminder.colorCode),
+                              const SizedBox(width: 8),
+                            ],
                             Expanded(
                               child: Text(reminder.productName,
                                   style: Theme.of(context).textTheme.titleMedium),
                             ),
+                            if (reminder.promo != null) ...[
+                              PromoBadge(promo: reminder.promo!),
+                              const SizedBox(width: 6),
+                            ],
                             if (priority)
                               Container(
                                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
@@ -1415,17 +1433,17 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         Wrap(
                           spacing: 8,
                           children: [
-                            for (final reason in const ['discarded', 'sold', 'transferred'])
+                            for (final reason in kHandlingReasons)
                               priority
                                   ? FilledButton.tonal(
                                       onPressed:
                                           _busy ? null : () => _handleReminder(reminder, reason),
-                                      child: Text(reason[0].toUpperCase() + reason.substring(1)),
+                                      child: Text(handlingReasonLabel(reason)),
                                     )
                                   : OutlinedButton(
                                       onPressed:
                                           _busy ? null : () => _handleReminder(reminder, reason),
-                                      child: Text(reason[0].toUpperCase() + reason.substring(1)),
+                                      child: Text(handlingReasonLabel(reason)),
                                     ),
                             OutlinedButton.icon(
                               onPressed: _busy ? null : () => _reprintBatch(reminder),
@@ -1683,6 +1701,7 @@ class ProductItem {
     required this.sku,
     required this.shelfLifeDays,
     required this.labelLanguage,
+    this.colorCode,
   });
 
   final int id;
@@ -1691,6 +1710,9 @@ class ProductItem {
   final int shelfLifeDays;
   final String labelLanguage;
 
+  /// 四色色标 code ('red'|'blue'|'green'|'yellow'); null for legacy data.
+  final String? colorCode;
+
   factory ProductItem.fromJson(Map<String, dynamic> json) {
     return ProductItem(
       id: (json['id'] as num).toInt(),
@@ -1698,6 +1720,7 @@ class ProductItem {
       sku: json['sku'] as String?,
       shelfLifeDays: (json['shelfLifeDays'] as num).toInt(),
       labelLanguage: json['labelLanguage'] as String,
+      colorCode: json['colorCode'] as String?,
     );
   }
 }
@@ -1709,6 +1732,8 @@ class ReminderItem {
     required this.expiresAt,
     this.batchId,
     this.isPriority = false,
+    this.colorCode,
+    this.promo,
   });
 
   final int id;
@@ -1721,6 +1746,12 @@ class ReminderItem {
   /// FIFO hint from the server: earliest unhandled batch of its product.
   final bool isPriority;
 
+  /// 四色色标 code of the product; null for legacy data.
+  final String? colorCode;
+
+  /// 临期促销建议; null when no promo rule matches.
+  final ReminderPromo? promo;
+
   factory ReminderItem.fromJson(Map<String, dynamic> json) {
     return ReminderItem(
       id: (json['id'] as num).toInt(),
@@ -1728,6 +1759,8 @@ class ReminderItem {
       expiresAt: json['expiresAt'] as String,
       batchId: (json['batchId'] as num?)?.toInt(),
       isPriority: json['is_priority'] == true || json['isPriority'] == true,
+      colorCode: json['colorCode'] as String?,
+      promo: ReminderPromo.fromJson(json['promo']),
     );
   }
 }

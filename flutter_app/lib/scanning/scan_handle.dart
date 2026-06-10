@@ -1,10 +1,22 @@
 import 'package:flutter/material.dart';
 
+/// Handling reasons offered to the operator, in display order.
+/// `'discounted'` = 转促销售出 (sold via expiry promo).
+const List<String> kHandlingReasons = ['discarded', 'sold', 'transferred', 'discounted'];
+
+/// Display label for a handling reason ('discounted' shows 中文「转促销售出」).
+String handlingReasonLabel(String reason) {
+  if (reason == 'discounted') {
+    return '转促销售出';
+  }
+  return reason[0].toUpperCase() + reason.substring(1);
+}
+
 /// Bottom sheet shown after scanning a label barcode: displays the matched
 /// batch/reminder and lets the operator pick a handling reason.
 ///
-/// Resolves with `'discarded' | 'sold' | 'transferred'`, or `null` when the
-/// operator dismisses the sheet.
+/// Resolves with `'discarded' | 'sold' | 'transferred' | 'discounted'`, or
+/// `null` when the operator dismisses the sheet.
 Future<String?> showScanHandleSheet(
   BuildContext context, {
   required String productName,
@@ -31,10 +43,10 @@ Future<String?> showScanHandleSheet(
                 style: Theme.of(ctx).textTheme.bodyMedium,
               ),
               const SizedBox(height: 16),
-              for (final reason in const ['discarded', 'sold', 'transferred']) ...[
+              for (final reason in kHandlingReasons) ...[
                 FilledButton.tonal(
                   onPressed: () => Navigator.of(ctx).pop(reason),
-                  child: Text(reason[0].toUpperCase() + reason.substring(1)),
+                  child: Text(handlingReasonLabel(reason)),
                 ),
                 const SizedBox(height: 8),
               ],

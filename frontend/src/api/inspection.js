@@ -17,6 +17,7 @@ export const getInspections = (params) => http.get('/admin/inspection/list', { p
 export const getInspection = (id) => http.get(`/admin/inspection/${id}`)
 
 // Admin — Issues
+export const getStores = () => http.get('/admin/stores')
 export const getIssues = (params) => http.get('/admin/inspection/issues', { params })
 export const createIssue = (data) => http.post('/admin/inspection/issues', data)
 export const updateIssue = (id, data) => http.patch(`/admin/inspection/issues/${id}`, data)

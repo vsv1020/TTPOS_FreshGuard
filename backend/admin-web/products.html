@@ -15,6 +15,7 @@
         <a class="active" href="/admin/products">Products</a>
         <a href="/admin/report">Report</a>
         <a href="/admin/waste">Waste</a>
+        <a href="/admin/compliance">Compliance</a>
         <a href="/admin/audit-logs">Audit</a>
         <a href="/admin/admins" data-nav="admins" hidden>Admins</a>
       </nav>
@@ -36,6 +37,8 @@
           <select id="product-primary-language" required></select>
           <select id="product-secondary-language"></select>
           <p class="hint">Bilingual labels require a secondary language.</p>
+          <select id="product-color-code"></select>
+          <p class="hint">四色色标：红=畜肉禽类 / 蓝=水产 / 绿=果蔬 / 黄=熟食半成品（可不选）。</p>
           <input id="product-allergens" placeholder="Allergens (optional)" />
           <input id="product-storage-conditions" placeholder="Storage conditions (optional)" />
           <input id="product-opened-shelf-life-hours" type="number" placeholder="Opened shelf life hours (optional)" />
@@ -69,6 +72,10 @@
             <button id="import-csv-btn" type="button" style="background:#15803d;">Import CSV</button>
           </span>
         </div>
+        <p class="hint">
+          CSV 支持 <code>colorCode</code> 列（四色色标）：<code>red</code>=畜肉禽类、<code>blue</code>=水产、
+          <code>green</code>=果蔬、<code>yellow</code>=熟食半成品，留空为无。
+        </p>
         <div id="import-result" class="hint" style="white-space:pre-line;"></div>
         <div id="products-controls"></div>
         <table>
@@ -77,6 +84,7 @@
               <th>Brand</th>
               <th>Name</th>
               <th>SKU</th>
+              <th>Color</th>
               <th>Shelf Life Days</th>
               <th>Label Language</th>
               <th>Primary</th>
@@ -110,6 +118,7 @@
           <select id="edit-product-primary-language" required></select>
           <select id="edit-product-secondary-language"></select>
           <p class="hint">Bilingual labels require a secondary language.</p>
+          <select id="edit-product-color-code"></select>
           <input id="edit-product-allergens" placeholder="Allergens (optional)" />
           <input id="edit-product-storage-conditions" placeholder="Storage conditions (optional)" />
           <input id="edit-product-opened-shelf-life-hours" type="number" placeholder="Opened shelf life hours (optional)" />

@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>FreshGuard Admin - 合规报告</title>
+    <link rel="stylesheet" href="/admin/assets/styles.css" />
+    <style>
+      .report-header h2 {
+        margin: 0 0 4px;
+        font-size: 1.3rem;
+        color: #0f172a;
+      }
+
+      .report-meta {
+        color: #475569;
+        font-size: 0.92rem;
+        margin: 0 0 4px;
+      }
+
+      .report-section {
+        margin-top: 18px;
+      }
+
+      .report-section h3 {
+        margin: 0 0 8px;
+        font-size: 1rem;
+        color: #0f172a;
+        border-left: 4px solid #0369a1;
+        padding-left: 8px;
+      }
+
+      .status-badge {
+        display: inline-block;
+        padding: 2px 10px;
+        border-radius: 999px;
+        font-size: 0.8rem;
+        font-weight: 700;
+      }
+
+      .status-ok { background: #dcfce7; color: #15803d; }
+      .status-warning { background: #fef9c3; color: #a16207; }
+      .status-fail { background: #fee2e2; color: #b91c1c; }
+      .status-unknown { background: #e2e8f0; color: #475569; }
+
+      .severity-high { color: #b91c1c; font-weight: 700; }
+      .severity-medium { color: #a16207; font-weight: 700; }
+      .severity-low { color: #15803d; }
+      .severity-unknown { color: #475569; }
+
+      .signature-row {
+        display: flex;
+        gap: 32px;
+        margin-top: 48px;
+      }
+
+      .signature-item {
+        flex: 1;
+        border-top: 1px solid #334155;
+        padding-top: 8px;
+        font-size: 0.92rem;
+        color: #334155;
+      }
+
+      .report-footer {
+        margin-top: 18px;
+        color: #64748b;
+        font-size: 0.85rem;
+      }
+
+      /* P2-1: print view — A4 portrait, filters/nav hidden, report only. */
+      @media print {
+        @page {
+          size: A4 portrait;
+          margin: 14mm;
+        }
+
+        body {
+          background: #ffffff;
+        }
+
+        .topbar,
+        .no-print,
+        .page-message {
+          display: none !important;
+        }
+
+        main.dashboard-grid {
+          display: block;
+          padding: 0;
+          margin: 0;
+        }
+
+        .panel {
+          box-shadow: none;
+          border: none;
+          padding: 0;
+          margin: 0;
+        }
+
+        .status-badge {
+          border: 1px solid currentColor;
+        }
+      }
+    </style>
+  </head>
+  <body class="dashboard-page">
+    <header class="topbar">
+      <h1>FreshGuard Admin</h1>
+      <nav class="topnav">
+        <a href="/admin/dashboard">Dashboard</a>
+        <a href="/admin/binding">Binding</a>
+        <a href="/admin/products">Products</a>
+        <a href="/admin/staff">Staff</a>
+        <a href="/admin/label-templates">Label Templates</a>
+        <a href="/admin/report">Report</a>
+        <a href="/admin/waste">Waste</a>
+        <a class="active" href="/admin/compliance">Compliance</a>
+        <a href="/admin/audit-logs">Audit</a>
+        <a href="/admin/admins" data-nav="admins" hidden>Admins</a>
+      </nav>
+      <button id="logout-btn" type="button">Log Out</button>
+    </header>
+
+    <main class="dashboard-grid">
+      <section class="panel wide no-print">
+        <h2>合规报告（日管控 · 周排查 · 月调度）</h2>
+        <p class="hint">依据市场监管总局食品安全「日管控、周排查、月调度」制度实时生成，供监管检查使用。</p>
+        <div class="filter-row">
+          <label for="comp-type">报告类型</label>
+          <select id="comp-type"></select>
+          <label for="comp-date" id="comp-date-label">日期</label>
+          <input id="comp-date" type="date" />
+          <label for="comp-brand">品牌</label>
+          <select id="comp-brand"></select>
+          <label for="comp-store">门店</label>
+          <select id="comp-store"></select>
+          <button id="comp-generate" type="button">生成报告</button>
+          <button id="comp-print" type="button" disabled>打印视图</button>
+        </div>
+      </section>
+
+      <section class="panel wide" id="comp-report" hidden></section>
+    </main>
+
+    <p id="page-message" class="page-message"></p>
+
+    <script src="/admin/assets/common.js"></script>
+    <script src="/admin/assets/compliance-view.js"></script>
+    <script src="/admin/assets/compliance.js"></script>
+  </body>
+</html>

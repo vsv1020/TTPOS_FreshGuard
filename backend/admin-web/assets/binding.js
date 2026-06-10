@@ -8,9 +8,14 @@ const reminderConfigForm = document.getElementById('reminder-config-form');
 const reminderBrandSelect = document.getElementById('reminder-config-brand');
 const reminderThresholdInput = document.getElementById('reminder-threshold-days');
 const reminderConfigHint = document.getElementById('reminder-config-hint');
+const promoBrandSelect = document.getElementById('promo-brand');
+const promoRulesTable = document.getElementById('promo-rules-table');
+const promoAddRuleBtn = document.getElementById('promo-add-rule');
+const promoSaveBtn = document.getElementById('promo-save');
 
 let brands = [];
 let stores = [];
+let promoRules = [];
 
 const bindingListControls = window.AdminCommon.createListControls({
   container: 'binding-controls',
@@ -26,6 +31,11 @@ function renderBrandSelect() {
   reminderBrandSelect.innerHTML = options;
   if (previous && brands.some((brand) => String(brand.id) === previous)) {
     reminderBrandSelect.value = previous;
+  }
+  const previousPromo = promoBrandSelect.value;
+  promoBrandSelect.innerHTML = options;
+  if (previousPromo && brands.some((brand) => String(brand.id) === previousPromo)) {
+    promoBrandSelect.value = previousPromo;
   }
 }
 
@@ -95,6 +105,119 @@ async function loadReminderConfig() {
   }
 }
 
+// P2-3: brand-level expiring promo rules (GET/PUT /api/admin/brands/:id/promo-rules).
+function renderPromoRules() {
+  const esc = window.AdminCommon.esc;
+
+  if (promoRules.length === 0) {
+    promoRulesTable.innerHTML = '<tr><td colspan="4">暂无规则，点击 Add Rule 新增。</td></tr>';
+    return;
+  }
+
+  promoRulesTable.innerHTML = promoRules
+    .map((rule, index) => {
+      const isDiscount = rule.action !== 'remove';
+      return `<tr>
+      <td><input type="number" min="1" step="1" data-index="${index}" data-field="hoursBeforeExpiry" value="${esc(rule.hoursBeforeExpiry)}" /></td>
+      <td>
+        <select data-index="${index}" data-field="action">
+          <option value="discount"${isDiscount ? ' selected' : ''}>打折</option>
+          <option value="remove"${isDiscount ? '' : ' selected'}>下架</option>
+        </select>
+      </td>
+      <td><input type="number" min="1" max="99" step="1" data-index="${index}" data-field="discountPercent" value="${isDiscount && rule.discountPercent != null ? esc(rule.discountPercent) : ''}"${isDiscount ? '' : ' disabled'} /></td>
+      <td><button type="button" data-action="promo-delete" data-index="${index}">Delete</button></td>
+    </tr>`;
+    })
+    .join('');
+}
+
+async function loadPromoRules() {
+  const brandId = Number(promoBrandSelect.value);
+  if (!brandId) {
+    promoRules = [];
+    renderPromoRules();
+    return;
+  }
+
+  try {
+    const data = await window.AdminCommon.requestJson(`/api/admin/brands/${brandId}/promo-rules`);
+    if (!data) {
+      return;
+    }
+    promoRules = (Array.isArray(data.rules) ? data.rules : []).map((rule) => ({ ...rule }));
+    renderPromoRules();
+  } catch (error) {
+    promoRules = [];
+    renderPromoRules();
+    window.AdminCommon.setPageMessage(`Could not load promo rules: ${error.message}`, true);
+  }
+}
+
+function handlePromoFieldChange(event) {
+  const target = event.target;
+  const field = target.dataset && target.dataset.field;
+  const index = Number(target.dataset && target.dataset.index);
+  if (!field || !promoRules[index]) {
+    return;
+  }
+  if (field === 'action') {
+    promoRules[index].action = target.value;
+    renderPromoRules(); // toggles the discount input's disabled state
+  } else {
+    promoRules[index][field] = target.value;
+  }
+}
+
+promoRulesTable.addEventListener('input', handlePromoFieldChange);
+promoRulesTable.addEventListener('change', handlePromoFieldChange);
+
+promoRulesTable.addEventListener('click', (event) => {
+  const button = event.target.closest('button[data-action="promo-delete"]');
+  if (!button) {
+    return;
+  }
+  promoRules.splice(Number(button.dataset.index), 1);
+  renderPromoRules();
+});
+
+promoAddRuleBtn.addEventListener('click', () => {
+  promoRules.push({ hoursBeforeExpiry: 24, action: 'discount', discountPercent: 50 });
+  renderPromoRules();
+});
+
+promoSaveBtn.addEventListener('click', async () => {
+  window.AdminCommon.setPageMessage('');
+
+  const brandId = Number(promoBrandSelect.value);
+  if (!brandId) {
+    window.AdminCommon.setPageMessage('请先选择品牌。', true);
+    return;
+  }
+
+  const result = window.AdminCommon.validatePromoRules(promoRules);
+  if (!result.ok) {
+    window.AdminCommon.setPageMessage(result.error, true);
+    return;
+  }
+
+  try {
+    await window.AdminCommon.requestJson(`/api/admin/brands/${brandId}/promo-rules`, {
+      method: 'PUT',
+      body: JSON.stringify({ rules: result.rules })
+    });
+    promoRules = result.rules.map((rule) => ({ ...rule }));
+    renderPromoRules();
+    window.AdminCommon.setPageMessage('Promo rules saved.');
+  } catch (error) {
+    window.AdminCommon.setPageMessage(error.message, true);
+  }
+});
+
+promoBrandSelect.addEventListener('change', () => {
+  loadPromoRules().catch((error) => window.AdminCommon.setPageMessage(error.message, true));
+});
+
 async function loadAll() {
   const [brandRes, storeRes] = await Promise.all([
     window.AdminCommon.requestJson('/api/admin/brands'),
@@ -110,7 +233,7 @@ async function loadAll() {
 
   renderBrandSelect();
   renderStoreSelect();
-  await Promise.all([loadBindingCodes(), loadReminderConfig()]);
+  await Promise.all([loadBindingCodes(), loadReminderConfig(), loadPromoRules()]);
 }
 
 brandForm.addEventListener('submit', async (event) => {

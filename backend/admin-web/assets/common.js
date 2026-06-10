@@ -54,6 +54,19 @@
     return flags;
   }
 
+  // P2-2: four-color kitchen color coding (中国后厨四色管理规范). Thermal labels
+  // are monochrome — labels carry a text mark; admin UI shows real swatches.
+  const PRODUCT_COLORS = [
+    { code: 'red', hex: '#dc2626', label: '红 · 畜肉禽类' },
+    { code: 'blue', hex: '#2563eb', label: '蓝 · 水产类' },
+    { code: 'green', hex: '#16a34a', label: '绿 · 果蔬类' },
+    { code: 'yellow', hex: '#ca8a04', label: '黄 · 熟食半成品' }
+  ];
+
+  function colorCodeMeta(code) {
+    return PRODUCT_COLORS.find((c) => c.code === code) || null;
+  }
+
   // Pure helper for CSV import responses: { inserted, updated, errors:[{line,message}] }.
   function formatImportSummary(result) {
     const inserted = Number(result && result.inserted) || 0;
@@ -128,6 +141,93 @@
     }));
 
     return { summary, byStore, byProduct, byReason, trend };
+  }
+
+  // P2-5: view-model builder for GET /api/admin/dashboard/store-ranking.
+  // Sorting and "bad cell" red-flag thresholds are computed here so they can
+  // be unit-tested without a DOM. Rates are 0..1; score is 0..100.
+  const STORE_RANKING_THRESHOLDS = {
+    handleRateMin: 0.8,
+    wasteRateMax: 0.1,
+    avgInspectionScoreMin: 60
+  };
+
+  function prepareStoreRanking(items, { key = 'wasteRate', dir = 'desc' } = {}) {
+    const num = (v) => (v == null || v === '' || !isFinite(Number(v)) ? null : Number(v));
+
+    const rows = (Array.isArray(items) ? items : []).map((row) => {
+      const handleRate = num(row.handleRate);
+      const wasteRate = num(row.wasteRate);
+      const avgInspectionScore = num(row.avgInspectionScore);
+      const openIssues = num(row.openIssues) || 0;
+      const overdueIssues = num(row.overdueIssues) || 0;
+      return {
+        storeId: row.storeId,
+        storeName: row.storeName,
+        handleRate,
+        wasteRate,
+        avgInspectionScore,
+        openIssues,
+        overdueIssues,
+        flags: {
+          handleRate: handleRate != null && handleRate < STORE_RANKING_THRESHOLDS.handleRateMin,
+          wasteRate: wasteRate != null && wasteRate > STORE_RANKING_THRESHOLDS.wasteRateMax,
+          avgInspectionScore:
+            avgInspectionScore != null &&
+            avgInspectionScore < STORE_RANKING_THRESHOLDS.avgInspectionScoreMin,
+          openIssues: openIssues > 0,
+          overdueIssues: overdueIssues > 0
+        }
+      };
+    });
+
+    const factor = dir === 'asc' ? 1 : -1;
+    rows.sort((a, b) => {
+      const av = a[key];
+      const bv = b[key];
+      if (av == null && bv == null) return 0;
+      if (av == null) return 1; // nulls always last
+      if (bv == null) return -1;
+      if (typeof av === 'string' || typeof bv === 'string') {
+        return String(av).localeCompare(String(bv)) * factor;
+      }
+      return (av - bv) * factor;
+    });
+
+    return rows;
+  }
+
+  // P2-3: validates and normalizes promo-rule rows before
+  // PUT /api/admin/brands/:id/promo-rules. Rules are sorted by
+  // hoursBeforeExpiry descending (the order the backend applies them).
+  // Returns { ok: true, rules } or { ok: false, error }.
+  function validatePromoRules(rows) {
+    const src = Array.isArray(rows) ? rows : [];
+    const rules = [];
+
+    for (let i = 0; i < src.length; i += 1) {
+      const row = src[i] || {};
+      const hours = Number(row.hoursBeforeExpiry);
+      if (!isFinite(hours) || hours <= 0) {
+        return { ok: false, error: `第 ${i + 1} 行：提前小时数必须是大于 0 的数字` };
+      }
+      if (row.action !== 'discount' && row.action !== 'remove') {
+        return { ok: false, error: `第 ${i + 1} 行：动作必须是打折或下架` };
+      }
+
+      const rule = { hoursBeforeExpiry: hours, action: row.action };
+      if (row.action === 'discount') {
+        const pct = Number(row.discountPercent);
+        if (!isFinite(pct) || pct <= 0 || pct >= 100) {
+          return { ok: false, error: `第 ${i + 1} 行：折扣 % 必须在 1-99 之间` };
+        }
+        rule.discountPercent = pct;
+      }
+      rules.push(rule);
+    }
+
+    rules.sort((a, b) => b.hoursBeforeExpiry - a.hoursBeforeExpiry);
+    return { ok: true, rules };
   }
 
   async function requestJson(url, options = {}) {
@@ -300,21 +400,25 @@
   }
 
   window.AdminCommon = {
+    PRODUCT_COLORS,
     applyRoleVisibility,
     bindLogout,
     clearSession,
+    colorCodeMeta,
     createListControls,
     esc,
     formatImportSummary,
     formatPercent,
     getSession,
+    prepareStoreRanking,
     prepareWasteView,
     pretty,
     requestJson,
     resolveRoleFlags,
     setPageMessage,
     storeSession,
-    unwrapList
+    unwrapList,
+    validatePromoRules
   };
 
   // Auto-apply role-aware visibility on every page that loads common.js

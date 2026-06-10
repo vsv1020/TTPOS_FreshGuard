@@ -17,6 +17,7 @@
         <a class="active" href="/admin/label-templates">Labels</a>
         <a href="/admin/report">Report</a>
         <a href="/admin/waste">Waste</a>
+        <a href="/admin/compliance">Compliance</a>
         <a href="/admin/audit-logs">Audit</a>
         <a href="/admin/admins" data-nav="admins" hidden>Admins</a>
       </nav>
@@ -61,6 +62,8 @@
             <tr><td><code>{{allergens}}</code></td><td>Allergen info</td></tr>
             <tr><td><code>{{storage}}</code></td><td>Storage conditions</td></tr>
             <tr><td><code>{{opened}}</code></td><td>Opened shelf life (hours)</td></tr>
+            <tr><td><code>{{color_label}}</code></td><td>Color code text mark (e.g. 红·畜肉禽类)</td></tr>
+            <tr><td><code>{{color_code}}</code></td><td>Color code value (red/blue/green/yellow)</td></tr>
           </tbody>
         </table>
 
@@ -68,6 +71,29 @@
         <p class="hint">Select a template row to enable live preview.</p>
         <pre id="preview-output" style="white-space:pre-wrap;background:#0f172a;color:#e2e8f0;padding:12px;border-radius:8px;min-height:80px;font-size:0.88rem;"></pre>
         <button id="preview-btn" type="button" disabled style="margin-top:8px;">Preview Selected</button>
+      </section>
+
+      <!-- Visual preview -->
+      <section class="panel wide">
+        <h2>Visual Preview</h2>
+        <p class="hint">
+          1:1 canvas render at label size (mm) and DPI with sample data. Follows the create form as
+          you type; click Select on a row to preview that template instead. Barcodes are mocked as
+          black bars; dashed lines are 2mm margin guides (not printed).
+        </p>
+        <div class="filter-row" id="preview-presets" style="align-items:center;">
+          <select id="preview-zoom" style="width:auto;">
+            <option value="0.5">50%</option>
+            <option value="0.75">75%</option>
+            <option value="1" selected>100%</option>
+            <option value="1.5">150%</option>
+            <option value="2">200%</option>
+          </select>
+        </div>
+        <div style="overflow:auto;background:#f1f5f9;border:1px solid #cbd5e1;border-radius:8px;padding:14px;">
+          <canvas id="preview-canvas" style="background:#fff;box-shadow:0 1px 4px rgba(15,23,42,0.18);"></canvas>
+        </div>
+        <p id="preview-source-hint" class="hint"></p>
       </section>
 
       <!-- Templates table -->
@@ -103,6 +129,10 @@
           <input id="edit-template-dpi" type="number" min="1" placeholder="DPI" />
           <label style="font-weight:600;font-size:0.9rem;margin-bottom:2px;">Body template</label>
           <textarea id="edit-template-body" rows="8" style="border:1px solid #cbd5e1;border-radius:8px;padding:10px 11px;font-size:0.92rem;font-family:monospace;resize:vertical;"></textarea>
+          <label style="font-weight:600;font-size:0.9rem;margin-bottom:2px;">Live preview</label>
+          <div style="overflow:auto;background:#f1f5f9;border:1px solid #cbd5e1;border-radius:8px;padding:10px;">
+            <canvas id="edit-preview-canvas" style="background:#fff;max-width:100%;height:auto;box-shadow:0 1px 4px rgba(15,23,42,0.18);"></canvas>
+          </div>
           <label style="display:flex;align-items:center;gap:8px;font-weight:600;cursor:pointer;">
             <input id="edit-template-default" type="checkbox" style="width:auto;padding:0;border:none;" />
             Set as default for brand
@@ -118,6 +148,7 @@
     <p id="page-message" class="page-message"></p>
 
     <script src="/admin/assets/common.js"></script>
+    <script src="/admin/assets/label-preview.js"></script>
     <script src="/admin/assets/label-templates.js"></script>
   </body>
 </html>

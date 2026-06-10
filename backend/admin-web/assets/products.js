@@ -4,6 +4,7 @@ const brandSelect = document.getElementById('product-brand');
 const storeSelect = document.getElementById('printer-store');
 const productsTable = document.getElementById('products-table');
 const labelLanguageSelect = document.getElementById('product-label-language');
+const colorCodeSelect = document.getElementById('product-color-code');
 const primaryLanguageSelect = document.getElementById('product-primary-language');
 const secondaryLanguageSelect = document.getElementById('product-secondary-language');
 const printerSelectedHint = document.getElementById('printer-selected-hint');
@@ -12,6 +13,7 @@ const editModal = document.getElementById('edit-modal');
 const editProductForm = document.getElementById('edit-product-form');
 const editBrandSelect = document.getElementById('edit-product-brand');
 const editLabelLanguageSelect = document.getElementById('edit-product-label-language');
+const editColorCodeSelect = document.getElementById('edit-product-color-code');
 const editPrimaryLanguageSelect = document.getElementById('edit-product-primary-language');
 const editSecondaryLanguageSelect = document.getElementById('edit-product-secondary-language');
 const editCancelBtn = document.getElementById('edit-cancel-btn');
@@ -42,6 +44,29 @@ function renderStoreSelect() {
   syncPrinterFormWithSelectedStore();
 }
 
+// P2-2: four-color code select. Options carry an inline color + ■ swatch so
+// the dropdown shows the real color (labels themselves print monochrome).
+function renderColorCodeSelects() {
+  const options = ['<option value="">色标: 无</option>']
+    .concat(
+      window.AdminCommon.PRODUCT_COLORS.map(
+        (c) => `<option value="${c.code}" style="color:${c.hex};">■ ${c.label}</option>`
+      )
+    )
+    .join('');
+  colorCodeSelect.innerHTML = options;
+  editColorCodeSelect.innerHTML = options;
+}
+
+function colorSwatchHtml(colorCode) {
+  const esc = window.AdminCommon.esc;
+  const meta = window.AdminCommon.colorCodeMeta(colorCode);
+  if (!meta) {
+    return '-';
+  }
+  return `<span title="${esc(meta.label)}" style="display:inline-block;width:14px;height:14px;border-radius:4px;background:${meta.hex};vertical-align:middle;"></span>`;
+}
+
 function renderProducts(products) {
   const esc = window.AdminCommon.esc;
   productsTable.innerHTML = products
@@ -50,6 +75,7 @@ function renderProducts(products) {
       <td>${esc(product.brandName)}</td>
       <td>${esc(product.name)}</td>
       <td>${esc(product.sku || '-')}</td>
+      <td>${colorSwatchHtml(product.colorCode)}</td>
       <td>${esc(product.shelfLifeDays)}</td>
       <td>${esc(product.labelLanguage)}</td>
       <td>${esc(product.primaryLanguage)}</td>
@@ -146,6 +172,7 @@ function openEditModal(product) {
 
   syncEditSecondaryLanguageRequired();
   editSecondaryLanguageSelect.value = product.secondaryLanguage || '';
+  editColorCodeSelect.value = product.colorCode || '';
 
   document.getElementById('edit-product-allergens').value = product.allergens || '';
   document.getElementById('edit-product-storage-conditions').value = product.storageConditions || '';
@@ -203,6 +230,7 @@ productForm.addEventListener('submit', async (event) => {
     labelLanguage: labelLanguageSelect.value,
     primaryLanguage: primaryLanguageSelect.value,
     secondaryLanguage: secondaryLanguageSelect.value,
+    colorCode: colorCodeSelect.value || null,
     allergens: textOrNull(document.getElementById('product-allergens').value),
     storageConditions: textOrNull(document.getElementById('product-storage-conditions').value),
     openedShelfLifeHours: parseNumberOrNull(document.getElementById('product-opened-shelf-life-hours').value),
@@ -238,6 +266,7 @@ editProductForm.addEventListener('submit', async (event) => {
     labelLanguage: editLabelLanguageSelect.value,
     primaryLanguage: editPrimaryLanguageSelect.value,
     secondaryLanguage: editSecondaryLanguageSelect.value,
+    colorCode: editColorCodeSelect.value || null,
     allergens: textOrNull(document.getElementById('edit-product-allergens').value),
     storageConditions: textOrNull(document.getElementById('edit-product-storage-conditions').value),
     openedShelfLifeHours: parseNumberOrNull(document.getElementById('edit-product-opened-shelf-life-hours').value),
@@ -414,5 +443,6 @@ storeSelect.addEventListener('change', syncPrinterFormWithSelectedStore);
 
 window.AdminCommon.bindLogout();
 renderLanguageSelects();
+renderColorCodeSelects();
 syncSecondaryLanguageRequired();
 loadAll().catch((error) => window.AdminCommon.setPageMessage(error.message, true));

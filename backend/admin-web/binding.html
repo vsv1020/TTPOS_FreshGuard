@@ -15,6 +15,7 @@
         <a href="/admin/products">Products</a>
         <a href="/admin/report">Report</a>
         <a href="/admin/waste">Waste</a>
+        <a href="/admin/compliance">Compliance</a>
         <a href="/admin/audit-logs">Audit</a>
         <a href="/admin/admins" data-nav="admins" hidden>Admins</a>
       </nav>
@@ -57,6 +58,30 @@
           <button type="submit">Save Reminder Config</button>
         </form>
         <p id="reminder-config-hint" class="hint"></p>
+      </section>
+
+      <section class="panel wide" data-write>
+        <h2>临期促销规则 (Promo Rules)</h2>
+        <div class="filter-row">
+          <label for="promo-brand">Brand</label>
+          <select id="promo-brand"></select>
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th>提前小时数</th>
+              <th>动作</th>
+              <th>折扣 %</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="promo-rules-table"></tbody>
+        </table>
+        <div class="filter-row" style="margin-top: 12px;">
+          <button id="promo-add-rule" type="button">Add Rule</button>
+          <button id="promo-save" type="button">Save Promo Rules</button>
+        </div>
+        <p id="promo-hint" class="hint">规则按提前小时数降序应用，临期提醒命中剩余时间最近的一档（打折需填折扣 %，下架无需折扣）。</p>
       </section>
 
       <section class="panel wide">

@@ -42,13 +42,24 @@
     Chart.defaults.color = CHART_DEFAULTS.color;
   }
 
+  // P2-5: charts are recreated on every filter refresh, so keep instances
+  // around and destroy the previous one before drawing.
+  const charts = {};
+
+  function makeChart(canvasId, config) {
+    if (charts[canvasId]) {
+      charts[canvasId].destroy();
+    }
+    charts[canvasId] = new Chart(document.getElementById(canvasId), config);
+  }
+
   // ── Ranking Bar Chart ──────────────────────────────────────────────────────
 
   function renderRanking(ranking) {
     const labels = ranking.map(function (r) { return esc(r.storeName); });
     const data   = ranking.map(function (r) { return Number(r.count); });
 
-    new Chart(document.getElementById('chart-ranking'), {
+    makeChart('chart-ranking', {
       type: 'bar',
       data: {
         labels: labels,
@@ -88,7 +99,7 @@
     const expired = trend.map(function (r) { return Number(r.expired); });
     const handled = trend.map(function (r) { return Number(r.handled); });
 
-    new Chart(document.getElementById('chart-loss'), {
+    makeChart('chart-loss', {
       type: 'line',
       data: {
         labels: labels,
@@ -141,7 +152,7 @@
       return r.avgScore != null ? Math.round(Number(r.avgScore) * 10) / 10 : null;
     });
 
-    new Chart(document.getElementById('chart-score'), {
+    makeChart('chart-score', {
       type: 'line',
       data: {
         labels: labels,
@@ -180,16 +191,143 @@
     });
   }
 
+  // ── P2-5: Filters (date range + brand/store drill-down) ───────────────────
+
+  const fromInput = document.getElementById('dash-from');
+  const toInput = document.getElementById('dash-to');
+  const brandSelect = document.getElementById('dash-brand');
+  const storeSelect = document.getElementById('dash-store');
+  const refreshBtn = document.getElementById('dash-refresh');
+
+  let stores = [];
+
+  function isoDate(date) {
+    return date.toISOString().slice(0, 10);
+  }
+
+  function setDefaultRange() {
+    const now = new Date();
+    const from = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+    toInput.value = isoDate(now);
+    fromInput.value = isoDate(from);
+  }
+
+  function renderStoreOptions() {
+    const brandId = brandSelect.value;
+    const filtered = brandId
+      ? stores.filter(function (store) { return String(store.brandId) === brandId; })
+      : stores;
+    storeSelect.innerHTML =
+      '<option value="">All stores</option>' +
+      filtered
+        .map(function (store) {
+          return `<option value="${esc(store.id)}">${esc(store.brandName)} / ${esc(store.name)}</option>`;
+        })
+        .join('');
+  }
+
+  async function loadFilters() {
+    const [brandRes, storeRes] = await Promise.all([
+      req('/api/admin/brands'),
+      req('/api/admin/stores')
+    ]);
+    if (!brandRes || !storeRes) {
+      return;
+    }
+    stores = storeRes.stores;
+    brandSelect.innerHTML =
+      '<option value="">All brands</option>' +
+      brandRes.brands
+        .map(function (brand) { return `<option value="${esc(brand.id)}">${esc(brand.name)}</option>`; })
+        .join('');
+    renderStoreOptions();
+  }
+
+  function filterQuery({ includeStore = true } = {}) {
+    const params = new URLSearchParams();
+    if (fromInput.value) params.set('from', fromInput.value);
+    if (toInput.value) params.set('to', toInput.value);
+    if (brandSelect.value) params.set('brandId', brandSelect.value);
+    if (includeStore && storeSelect.value) params.set('storeId', storeSelect.value);
+    return params.toString();
+  }
+
+  // ── P2-5: Store Ranking table ──────────────────────────────────────────────
+
+  const rankingTableBody = document.getElementById('store-ranking-table');
+  const rankingHead = document.getElementById('ranking-head');
+  const rankingSort = { key: 'wasteRate', dir: 'desc' };
+  let rankingItems = [];
+
+  function renderStoreRankingTable() {
+    const fp = window.AdminCommon.formatPercent;
+    const rows = window.AdminCommon.prepareStoreRanking(rankingItems, rankingSort);
+
+    rankingHead.querySelectorAll('th.sortable').forEach(function (th) {
+      const base = th.textContent.replace(/ [▲▼]$/, '');
+      th.textContent =
+        th.dataset.key === rankingSort.key
+          ? base + (rankingSort.dir === 'asc' ? ' ▲' : ' ▼')
+          : base;
+    });
+
+    if (rows.length === 0) {
+      rankingTableBody.innerHTML = '<tr><td colspan="6">No data in this range.</td></tr>';
+      return;
+    }
+
+    rankingTableBody.innerHTML = rows
+      .map(function (r) {
+        return `<tr>
+        <td>${esc(r.storeName)}</td>
+        <td class="${r.flags.handleRate ? 'bad' : ''}">${fp(r.handleRate)}</td>
+        <td class="${r.flags.wasteRate ? 'bad' : ''}">${fp(r.wasteRate)}</td>
+        <td class="${r.flags.avgInspectionScore ? 'bad' : ''}">${r.avgInspectionScore != null ? esc(r.avgInspectionScore.toFixed(1)) : '-'}</td>
+        <td class="${r.flags.openIssues ? 'bad' : ''}">${esc(r.openIssues)}</td>
+        <td class="${r.flags.overdueIssues ? 'bad' : ''}">${esc(r.overdueIssues)}</td>
+      </tr>`;
+      })
+      .join('');
+  }
+
+  rankingHead.addEventListener('click', function (event) {
+    const th = event.target.closest('th.sortable');
+    if (!th) return;
+    const key = th.dataset.key;
+    if (rankingSort.key === key) {
+      rankingSort.dir = rankingSort.dir === 'asc' ? 'desc' : 'asc';
+    } else {
+      rankingSort.key = key;
+      rankingSort.dir = key === 'storeName' ? 'asc' : 'desc';
+    }
+    renderStoreRankingTable();
+  });
+
+  // store-ranking 按契约只接受 from/to/brandId（brand admin 自动收窄）。
+  // 单独捕获错误，后端尚未部署该端点时不影响其余图表。
+  async function loadStoreRanking() {
+    try {
+      const res = await req(`/api/admin/dashboard/store-ranking?${filterQuery({ includeStore: false })}`);
+      if (!res) return;
+      rankingItems = Array.isArray(res.items) ? res.items : [];
+      renderStoreRankingTable();
+    } catch (err) {
+      rankingItems = [];
+      rankingTableBody.innerHTML = `<tr><td colspan="6">门店排名加载失败：${esc(err.message)}</td></tr>`;
+    }
+  }
+
   // ── Bootstrap ──────────────────────────────────────────────────────────────
 
   async function loadDashboard() {
     applyDefaults();
 
+    const qs = filterQuery();
     const [summaryRes, rankingRes, lossRes, scoreRes] = await Promise.all([
-      req('/api/admin/dashboard/summary'),
-      req('/api/admin/dashboard/ranking'),
-      req('/api/admin/dashboard/loss-trend'),
-      req('/api/admin/dashboard/score-trend')
+      req(`/api/admin/dashboard/summary?${qs}`),
+      req(`/api/admin/dashboard/ranking?${qs}`),
+      req(`/api/admin/dashboard/loss-trend?${qs}`),
+      req(`/api/admin/dashboard/score-trend?${qs}`)
     ]);
 
     if (!summaryRes || !rankingRes || !lossRes || !scoreRes) {
@@ -202,8 +340,25 @@
     renderScoreTrend(scoreRes.trend);
   }
 
-  window.AdminCommon.bindLogout();
-  loadDashboard().catch(function (err) {
-    console.error('Dashboard load error:', err);
+  function refreshAll() {
+    loadDashboard().catch(function (err) {
+      console.error('Dashboard load error:', err);
+    });
+    loadStoreRanking();
+  }
+
+  brandSelect.addEventListener('change', function () {
+    renderStoreOptions();
+    refreshAll();
   });
+  storeSelect.addEventListener('change', refreshAll);
+  refreshBtn.addEventListener('click', refreshAll);
+
+  window.AdminCommon.bindLogout();
+  setDefaultRange();
+  loadFilters()
+    .then(refreshAll)
+    .catch(function (err) {
+      console.error('Dashboard load error:', err);
+    });
 })();

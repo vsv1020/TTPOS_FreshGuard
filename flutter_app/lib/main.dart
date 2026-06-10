@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'notifications/reminder_notifications.dart';
+import 'paging.dart';
 import 'printer/usb_printer.dart';
 
 const _sessionKey = 'freshguard_session';
@@ -27,6 +29,7 @@ class _FreshGuardStoreAppState extends State<FreshGuardStoreApp> {
   @override
   void initState() {
     super.initState();
+    ReminderNotificationService.instance.init();
     _loadSession();
   }
 
@@ -214,9 +217,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   final _quantityController = TextEditingController(text: '1');
 
+  static const _pageSize = 20;
+
   List<ProductItem> _products = [];
   List<ReminderItem> _reminders = [];
   List<UsbPrinterDevice> _usbDevices = [];
+  bool _productsHasMore = false;
+  bool _remindersHasMore = false;
+  bool _loadingMoreProducts = false;
+  bool _loadingMoreReminders = false;
   int? _selectedProductId;
   PrinterProfile _printerProfile = PrinterProfile.tspl;
   UsbPrinterDevice? _selectedUsbDevice;
@@ -286,8 +295,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
     });
 
     try {
-      final productsFuture = _api.fetchProducts();
-      final remindersFuture = _api.fetchReminders(status: _reminderStatus);
+      final productsFuture = _api.fetchProducts(limit: _pageSize);
+      final remindersFuture = _api.fetchReminders(status: _reminderStatus, limit: _pageSize);
       final products = await productsFuture;
       final reminders = await remindersFuture;
 
@@ -296,10 +305,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
       }
 
       setState(() {
-        _products = products;
-        _reminders = reminders;
-        _selectedProductId = _selectedProductId ?? (products.isNotEmpty ? products.first.id : null);
+        _products = products.items;
+        _productsHasMore = products.hasMoreAfter(0);
+        _reminders = reminders.items;
+        _remindersHasMore = reminders.hasMoreAfter(0);
+        _selectedProductId =
+            _selectedProductId ?? (products.items.isNotEmpty ? products.items.first.id : null);
       });
+      _syncReminderNotifications(reminders.items);
     } catch (error) {
       if (!mounted) {
         return;
@@ -313,6 +326,82 @@ class _DashboardScreenState extends State<DashboardScreen> {
           _busy = false;
         });
       }
+    }
+  }
+
+  void _syncReminderNotifications(List<ReminderItem> reminders, {bool reset = true}) {
+    final notices = <ExpiryNotice>[];
+    for (final reminder in reminders) {
+      final expiresAt = parseServerUtc(reminder.expiresAt);
+      if (expiresAt == null) {
+        continue;
+      }
+      notices.add(ExpiryNotice(
+        id: reminder.id,
+        title: reminder.productName,
+        expiresAt: expiresAt,
+      ));
+    }
+    // Fire and forget; the service is best-effort and never throws.
+    ReminderNotificationService.instance.syncSchedules(notices, reset: reset);
+  }
+
+  Future<void> _loadMoreProducts() async {
+    if (_busy || _loadingMoreProducts || !_productsHasMore) {
+      return;
+    }
+    _loadingMoreProducts = true;
+    final offset = _products.length;
+    try {
+      final result = await _api.fetchProducts(limit: _pageSize, offset: offset);
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _products = [..._products, ...result.items];
+        _productsHasMore = result.hasMoreAfter(offset);
+      });
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _message = error.toString().replaceFirst('Exception: ', '');
+      });
+    } finally {
+      _loadingMoreProducts = false;
+    }
+  }
+
+  Future<void> _loadMoreReminders() async {
+    if (_busy || _loadingMoreReminders || !_remindersHasMore) {
+      return;
+    }
+    _loadingMoreReminders = true;
+    final offset = _reminders.length;
+    try {
+      final result = await _api.fetchReminders(
+        status: _reminderStatus,
+        limit: _pageSize,
+        offset: offset,
+      );
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _reminders = [..._reminders, ...result.items];
+        _remindersHasMore = result.hasMoreAfter(offset);
+      });
+      _syncReminderNotifications(result.items, reset: false);
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _message = error.toString().replaceFirst('Exception: ', '');
+      });
+    } finally {
+      _loadingMoreReminders = false;
     }
   }
 
@@ -355,19 +444,21 @@ class _DashboardScreenState extends State<DashboardScreen> {
         quantity: quantity,
         staffId: _currentStaff?.id,
       );
-      final reminders = await _api.fetchReminders(status: _reminderStatus);
+      final reminders = await _api.fetchReminders(status: _reminderStatus, limit: _pageSize);
 
       if (!mounted) {
         return;
       }
 
       setState(() {
-        _reminders = reminders;
+        _reminders = reminders.items;
+        _remindersHasMore = reminders.hasMoreAfter(0);
         _lastBackendLabelText = result.labelText;
         _lastBackendLabel = result.labelData;
         _message =
             'Batch ${result.batchId} created. ${result.remindersCreated} reminders generated for expiry tracking. Backend label text loaded for test print.';
       });
+      _syncReminderNotifications(reminders.items);
     } catch (error) {
       if (!mounted) {
         return;
@@ -407,16 +498,18 @@ class _DashboardScreenState extends State<DashboardScreen> {
         reason: reason,
         staffId: _currentStaff?.id,
       );
-      final reminders = await _api.fetchReminders(status: _reminderStatus);
+      final reminders = await _api.fetchReminders(status: _reminderStatus, limit: _pageSize);
 
       if (!mounted) {
         return;
       }
 
       setState(() {
-        _reminders = reminders;
+        _reminders = reminders.items;
+        _remindersHasMore = reminders.hasMoreAfter(0);
         _message = 'Reminder ${reminder.id} marked as $reason.';
       });
+      _syncReminderNotifications(reminders.items);
     } catch (error) {
       if (!mounted) {
         return;
@@ -664,9 +757,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   Widget _buildProductsTab(BuildContext context) {
-    return ListView(
-      padding: const EdgeInsets.all(12),
-      children: [
+    return LoadMoreOnScroll(
+      onLoadMore: _loadMoreProducts,
+      child: ListView(
+        padding: const EdgeInsets.all(12),
+        children: [
         Card(
           child: Padding(
             padding: const EdgeInsets.all(12),
@@ -820,7 +915,19 @@ class _DashboardScreenState extends State<DashboardScreen> {
           const Card(
             child: ListTile(title: Text('No products found for this store brand.')),
           ),
+        if (_productsHasMore)
+          const Padding(
+            padding: EdgeInsets.all(16),
+            child: Center(
+              child: SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+            ),
+          ),
       ],
+      ),
     );
   }
 
@@ -862,43 +969,88 @@ class _DashboardScreenState extends State<DashboardScreen> {
           ),
         ),
         Expanded(
-          child: ListView.builder(
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            itemCount: _reminders.length,
-            itemBuilder: (context, index) {
-              final reminder = _reminders[index];
-              return Card(
-                child: Padding(
-                  padding: const EdgeInsets.all(12),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(reminder.productName, style: Theme.of(context).textTheme.titleMedium),
-                      const SizedBox(height: 4),
-                      Text('Reminder #${reminder.id} | Expires: ${reminder.expiresAt}'),
-                      const SizedBox(height: 10),
-                      Wrap(
-                        spacing: 8,
-                        children: [
-                          OutlinedButton(
-                            onPressed: _busy ? null : () => _handleReminder(reminder, 'discarded'),
-                            child: const Text('Discarded'),
-                          ),
-                          OutlinedButton(
-                            onPressed: _busy ? null : () => _handleReminder(reminder, 'sold'),
-                            child: const Text('Sold'),
-                          ),
-                          OutlinedButton(
-                            onPressed: _busy ? null : () => _handleReminder(reminder, 'transferred'),
-                            child: const Text('Transferred'),
-                          ),
-                        ],
+          child: LoadMoreOnScroll(
+            onLoadMore: _loadMoreReminders,
+            child: ListView.builder(
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              itemCount: _reminders.length + (_remindersHasMore ? 1 : 0),
+              itemBuilder: (context, index) {
+                if (index >= _reminders.length) {
+                  return const Padding(
+                    padding: EdgeInsets.all(16),
+                    child: Center(
+                      child: SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(strokeWidth: 2),
                       ),
-                    ],
+                    ),
+                  );
+                }
+                final reminder = _reminders[index];
+                final priority = reminder.isPriority;
+                return Card(
+                  shape: priority
+                      ? RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                          side: const BorderSide(color: Colors.deepOrange, width: 2),
+                        )
+                      : null,
+                  child: Padding(
+                    padding: const EdgeInsets.all(12),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Text(reminder.productName,
+                                  style: Theme.of(context).textTheme.titleMedium),
+                            ),
+                            if (priority)
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                decoration: BoxDecoration(
+                                  color: Colors.deepOrange,
+                                  borderRadius: BorderRadius.circular(6),
+                                ),
+                                child: const Text(
+                                  '应先处理',
+                                  style: TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ),
+                          ],
+                        ),
+                        const SizedBox(height: 4),
+                        Text('Reminder #${reminder.id} | Expires: ${reminder.expiresAt}'),
+                        const SizedBox(height: 10),
+                        Wrap(
+                          spacing: 8,
+                          children: [
+                            for (final reason in const ['discarded', 'sold', 'transferred'])
+                              priority
+                                  ? FilledButton.tonal(
+                                      onPressed:
+                                          _busy ? null : () => _handleReminder(reminder, reason),
+                                      child: Text(reason[0].toUpperCase() + reason.substring(1)),
+                                    )
+                                  : OutlinedButton(
+                                      onPressed:
+                                          _busy ? null : () => _handleReminder(reminder, reason),
+                                      child: Text(reason[0].toUpperCase() + reason.substring(1)),
+                                    ),
+                          ],
+                        ),
+                      ],
+                    ),
                   ),
-                ),
-              );
-            },
+                );
+              },
+            ),
           ),
         ),
         if (_reminders.isEmpty)
@@ -917,7 +1069,7 @@ class ApiClient {
   final String baseUrl;
   final String? token;
 
-  Future<Map<String, dynamic>> _request(
+  Future<dynamic> _request(
     String path, {
     String method = 'GET',
     Map<String, dynamic>? body,
@@ -935,12 +1087,13 @@ class ApiClient {
       response = await http.get(uri, headers: headers);
     }
 
-    final parsed = response.body.isEmpty
-        ? <String, dynamic>{}
-        : (jsonDecode(response.body) as Map<String, dynamic>);
+    final dynamic parsed =
+        response.body.isEmpty ? <String, dynamic>{} : jsonDecode(response.body);
 
     if (response.statusCode >= 400) {
-      final error = parsed['error']?.toString() ?? 'HTTP ${response.statusCode}';
+      final error = parsed is Map<String, dynamic>
+          ? (parsed['error']?.toString() ?? 'HTTP ${response.statusCode}')
+          : 'HTTP ${response.statusCode}';
       throw Exception(error);
     }
 
@@ -968,10 +1121,19 @@ class ApiClient {
     );
   }
 
-  Future<List<ProductItem>> fetchProducts() async {
-    final result = await _request('/api/store/products');
-    final items = result['products'] as List<dynamic>? ?? [];
-    return items.map((item) => ProductItem.fromJson(item as Map<String, dynamic>)).toList();
+  Future<PagedResult<ProductItem>> fetchProducts({
+    int? limit,
+    int offset = 0,
+    String? q,
+  }) async {
+    final params = <String, String>{
+      if (limit != null) 'limit': '$limit',
+      if (limit != null && offset > 0) 'offset': '$offset',
+      if (q != null && q.isNotEmpty) 'q': q,
+    };
+    final query = params.isEmpty ? '' : '?${Uri(queryParameters: params).query}';
+    final result = await _request('/api/store/products$query');
+    return PagedResult.parse(result, 'products', ProductItem.fromJson);
   }
 
   Future<List<StaffItem>> fetchStaff() async {
@@ -1015,11 +1177,19 @@ class ApiClient {
     );
   }
 
-  Future<List<ReminderItem>> fetchReminders({required String status}) async {
-    final query = Uri(queryParameters: {'status': status}).query;
+  Future<PagedResult<ReminderItem>> fetchReminders({
+    required String status,
+    int? limit,
+    int offset = 0,
+  }) async {
+    final params = <String, String>{
+      'status': status,
+      if (limit != null) 'limit': '$limit',
+      if (limit != null && offset > 0) 'offset': '$offset',
+    };
+    final query = Uri(queryParameters: params).query;
     final result = await _request('/api/store/reminders?$query');
-    final items = result['reminders'] as List<dynamic>? ?? [];
-    return items.map((item) => ReminderItem.fromJson(item as Map<String, dynamic>)).toList();
+    return PagedResult.parse(result, 'reminders', ReminderItem.fromJson);
   }
 
   Future<void> handleReminder({
@@ -1108,17 +1278,22 @@ class ReminderItem {
     required this.id,
     required this.productName,
     required this.expiresAt,
+    this.isPriority = false,
   });
 
   final int id;
   final String productName;
   final String expiresAt;
 
+  /// FIFO hint from the server: earliest unhandled batch of its product.
+  final bool isPriority;
+
   factory ReminderItem.fromJson(Map<String, dynamic> json) {
     return ReminderItem(
       id: (json['id'] as num).toInt(),
       productName: json['productName'] as String,
       expiresAt: json['expiresAt'] as String,
+      isPriority: json['is_priority'] == true || json['isPriority'] == true,
     );
   }
 }

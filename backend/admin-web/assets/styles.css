@@ -239,3 +239,10 @@ th {
     width: fit-content;
   }
 }
+
+/* Viewer role: hide all write affordances (forms marked data-write and
+   dynamically rendered row action buttons). Server still enforces RBAC. */
+body.role-viewer [data-write],
+body.role-viewer button[data-action] {
+  display: none !important;
+}

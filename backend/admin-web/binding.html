@@ -14,13 +14,15 @@
         <a class="active" href="/admin/binding">Binding</a>
         <a href="/admin/products">Products</a>
         <a href="/admin/report">Report</a>
+        <a href="/admin/waste">Waste</a>
         <a href="/admin/audit-logs">Audit</a>
+        <a href="/admin/admins" data-nav="admins" hidden>Admins</a>
       </nav>
       <button id="logout-btn" type="button">Log Out</button>
     </header>
 
     <main class="dashboard-grid">
-      <section class="panel">
+      <section class="panel" data-write>
         <h2>Create Brand</h2>
         <form id="brand-form" class="stack">
           <input id="brand-name" placeholder="Brand name" required />
@@ -28,7 +30,7 @@
         </form>
       </section>
 
-      <section class="panel">
+      <section class="panel" data-write>
         <h2>Create Store</h2>
         <form id="store-form" class="stack">
           <select id="store-brand" required></select>
@@ -37,7 +39,7 @@
         </form>
       </section>
 
-      <section class="panel">
+      <section class="panel" data-write>
         <h2>Generate Binding Code</h2>
         <form id="binding-form" class="stack">
           <select id="binding-store" required></select>
@@ -47,7 +49,7 @@
         <p class="hint">One-time code for store device activation (no staff login).</p>
       </section>
 
-      <section class="panel">
+      <section class="panel" data-write>
         <h2>Brand Reminder Config</h2>
         <form id="reminder-config-form" class="stack">
           <select id="reminder-config-brand" required></select>

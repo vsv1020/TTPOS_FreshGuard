@@ -1,0 +1,231 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>FreshGuard Admin - Waste Dashboard</title>
+    <link rel="stylesheet" href="/admin/assets/styles.css" />
+    <style>
+      .waste-kpi-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+        gap: 14px;
+        margin-top: 12px;
+      }
+
+      .waste-kpi-card {
+        background: #f8fafc;
+        border: 1px solid #e2e8f0;
+        border-radius: 12px;
+        padding: 14px 14px 12px;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+
+      .waste-kpi-label {
+        font-size: 0.8rem;
+        color: #64748b;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+      }
+
+      .waste-kpi-value {
+        font-size: 1.7rem;
+        font-weight: 800;
+        color: #0f172a;
+        line-height: 1.1;
+      }
+
+      .waste-kpi-card.danger .waste-kpi-value {
+        color: #b91c1c;
+      }
+
+      tr.waste-high td {
+        color: #b91c1c;
+        font-weight: 700;
+        background: #fef2f2;
+      }
+
+      .bar-row {
+        display: grid;
+        grid-template-columns: minmax(90px, 160px) 1fr 56px;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 8px;
+        font-size: 0.9rem;
+      }
+
+      .bar-row .bar-label {
+        color: #334155;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .bar-track {
+        background: #e2e8f0;
+        border-radius: 6px;
+        height: 16px;
+        overflow: hidden;
+      }
+
+      .bar-fill {
+        background: #0369a1;
+        height: 100%;
+        border-radius: 6px;
+        min-width: 2px;
+      }
+
+      .bar-row .bar-count {
+        text-align: right;
+        color: #475569;
+      }
+
+      .trend-chart {
+        display: flex;
+        align-items: flex-end;
+        gap: 3px;
+        height: 160px;
+        margin-top: 10px;
+        border-bottom: 1px solid #cbd5e1;
+        padding-bottom: 2px;
+      }
+
+      .trend-col {
+        flex: 1 1 0;
+        display: flex;
+        align-items: flex-end;
+        height: 100%;
+      }
+
+      .trend-bar {
+        width: 100%;
+        background: #b91c1c;
+        border-radius: 3px 3px 0 0;
+        min-height: 2px;
+        opacity: 0.85;
+      }
+
+      .trend-col:hover .trend-bar {
+        opacity: 1;
+      }
+
+      .trend-axis {
+        display: flex;
+        justify-content: space-between;
+        font-size: 0.78rem;
+        color: #64748b;
+        margin-top: 4px;
+      }
+
+      .empty-note {
+        color: #94a3b8;
+        font-size: 0.9rem;
+        padding: 8px 0;
+      }
+    </style>
+  </head>
+  <body class="dashboard-page">
+    <header class="topbar">
+      <h1>FreshGuard Admin</h1>
+      <nav class="topnav">
+        <a href="/admin/dashboard">Dashboard</a>
+        <a href="/admin/binding">Binding</a>
+        <a href="/admin/products">Products</a>
+        <a href="/admin/staff">Staff</a>
+        <a href="/admin/label-templates">Label Templates</a>
+        <a href="/admin/report">Report</a>
+        <a class="active" href="/admin/waste">Waste</a>
+        <a href="/admin/audit-logs">Audit</a>
+        <a href="/admin/admins" data-nav="admins" hidden>Admins</a>
+      </nav>
+      <button id="logout-btn" type="button">Log Out</button>
+    </header>
+
+    <main class="dashboard-grid">
+      <section class="panel wide">
+        <h2>Waste Dashboard</h2>
+        <p class="hint">Waste rate = discarded batches / total batches in range. Discard amount sums product cost_price; batches without a cost count as 0.</p>
+        <div class="filter-row">
+          <label for="waste-from">From</label>
+          <input id="waste-from" type="date" />
+          <label for="waste-to">To</label>
+          <input id="waste-to" type="date" />
+          <label for="waste-brand">Brand</label>
+          <select id="waste-brand"></select>
+          <label for="waste-store">Store</label>
+          <select id="waste-store"></select>
+          <button id="waste-refresh" type="button">Refresh</button>
+        </div>
+        <div class="waste-kpi-grid">
+          <div class="waste-kpi-card">
+            <span class="waste-kpi-label">Total Batches</span>
+            <span class="waste-kpi-value" id="waste-total-batches">—</span>
+          </div>
+          <div class="waste-kpi-card danger">
+            <span class="waste-kpi-label">Discarded</span>
+            <span class="waste-kpi-value" id="waste-discarded-count">—</span>
+          </div>
+          <div class="waste-kpi-card danger">
+            <span class="waste-kpi-label">Waste Rate</span>
+            <span class="waste-kpi-value" id="waste-rate">—</span>
+          </div>
+          <div class="waste-kpi-card">
+            <span class="waste-kpi-label">Discard Amount</span>
+            <span class="waste-kpi-value" id="waste-discard-amount">—</span>
+          </div>
+        </div>
+        <p class="hint" id="waste-missing-cost" hidden></p>
+      </section>
+
+      <section class="panel wide">
+        <h2>Store Waste Ranking</h2>
+        <p class="hint">Sorted by waste rate (worst first). Stores above the overall waste rate are highlighted in red.</p>
+        <table>
+          <thead>
+            <tr>
+              <th>Store</th>
+              <th>Total Batches</th>
+              <th>Discarded</th>
+              <th>Waste Rate</th>
+              <th>Discard Amount</th>
+            </tr>
+          </thead>
+          <tbody id="waste-by-store"></tbody>
+        </table>
+      </section>
+
+      <section class="panel">
+        <h2>Top Waste Products</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Product</th>
+              <th>Discarded</th>
+              <th>Waste Rate</th>
+              <th>Amount</th>
+            </tr>
+          </thead>
+          <tbody id="waste-by-product"></tbody>
+        </table>
+      </section>
+
+      <section class="panel">
+        <h2>Discard Reasons</h2>
+        <div id="waste-by-reason"></div>
+      </section>
+
+      <section class="panel wide">
+        <h2>Discard Trend</h2>
+        <div id="waste-trend"></div>
+      </section>
+    </main>
+
+    <p id="page-message" class="page-message"></p>
+
+    <script src="/admin/assets/common.js"></script>
+    <script src="/admin/assets/waste.js"></script>
+  </body>
+</html>

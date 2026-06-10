@@ -57,6 +57,7 @@ function renderProducts(products) {
       <td>${esc(product.allergens || '-')}</td>
       <td>${esc(product.storageConditions || '-')}</td>
       <td>${esc(product.openedShelfLifeHours != null ? product.openedShelfLifeHours : '-')}</td>
+      <td>${esc(product.costPrice != null ? product.costPrice : '-')}</td>
       <td style="white-space:nowrap;">
         <button type="button" data-action="edit" data-id="${esc(product.id)}" style="background:#0369a1;padding:6px 10px;font-size:0.82rem;">Edit</button>
         <button type="button" data-action="delete" data-id="${esc(product.id)}" style="background:#b91c1c;padding:6px 10px;font-size:0.82rem;margin-left:4px;">Delete</button>
@@ -150,6 +151,8 @@ function openEditModal(product) {
   document.getElementById('edit-product-storage-conditions').value = product.storageConditions || '';
   document.getElementById('edit-product-opened-shelf-life-hours').value =
     product.openedShelfLifeHours != null ? product.openedShelfLifeHours : '';
+  document.getElementById('edit-product-cost-price').value =
+    product.costPrice != null ? product.costPrice : '';
 
   editModal.style.display = 'flex';
 }
@@ -202,7 +205,8 @@ productForm.addEventListener('submit', async (event) => {
     secondaryLanguage: secondaryLanguageSelect.value,
     allergens: textOrNull(document.getElementById('product-allergens').value),
     storageConditions: textOrNull(document.getElementById('product-storage-conditions').value),
-    openedShelfLifeHours: parseNumberOrNull(document.getElementById('product-opened-shelf-life-hours').value)
+    openedShelfLifeHours: parseNumberOrNull(document.getElementById('product-opened-shelf-life-hours').value),
+    costPrice: parseNumberOrNull(document.getElementById('product-cost-price').value)
   };
 
   try {
@@ -236,7 +240,8 @@ editProductForm.addEventListener('submit', async (event) => {
     secondaryLanguage: editSecondaryLanguageSelect.value,
     allergens: textOrNull(document.getElementById('edit-product-allergens').value),
     storageConditions: textOrNull(document.getElementById('edit-product-storage-conditions').value),
-    openedShelfLifeHours: parseNumberOrNull(document.getElementById('edit-product-opened-shelf-life-hours').value)
+    openedShelfLifeHours: parseNumberOrNull(document.getElementById('edit-product-opened-shelf-life-hours').value),
+    costPrice: parseNumberOrNull(document.getElementById('edit-product-cost-price').value)
   };
 
   try {
@@ -308,6 +313,90 @@ printerForm.addEventListener('submit', async (event) => {
     syncPrinterFormWithSelectedStore();
     window.AdminCommon.setPageMessage('Printer settings updated.');
   } catch (error) {
+    window.AdminCommon.setPageMessage(error.message, true);
+  }
+});
+
+const exportCsvBtn = document.getElementById('export-csv-btn');
+const downloadTemplateBtn = document.getElementById('download-template-btn');
+const importCsvBtn = document.getElementById('import-csv-btn');
+const importCsvFile = document.getElementById('import-csv-file');
+const importResult = document.getElementById('import-result');
+
+async function downloadCsv(url, filename) {
+  const response = await fetch(url, { credentials: 'include' });
+
+  if (response.status === 401 || response.status === 403) {
+    window.location.href = '/admin/login';
+    return;
+  }
+
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(body.error || `Download failed (${response.status})`);
+  }
+
+  const blob = await response.blob();
+  const objectUrl = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = objectUrl;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(objectUrl);
+}
+
+exportCsvBtn.addEventListener('click', async () => {
+  window.AdminCommon.setPageMessage('');
+  const params = new URLSearchParams({ format: 'csv' });
+  if (productListControls.state.q) {
+    params.set('q', productListControls.state.q);
+  }
+  try {
+    await downloadCsv(`/api/admin/products?${params.toString()}`, 'products.csv');
+  } catch (error) {
+    window.AdminCommon.setPageMessage(error.message, true);
+  }
+});
+
+downloadTemplateBtn.addEventListener('click', async () => {
+  window.AdminCommon.setPageMessage('');
+  try {
+    await downloadCsv('/api/admin/products/import-template.csv', 'products-import-template.csv');
+  } catch (error) {
+    window.AdminCommon.setPageMessage(error.message, true);
+  }
+});
+
+importCsvBtn.addEventListener('click', () => {
+  importCsvFile.click();
+});
+
+importCsvFile.addEventListener('change', async () => {
+  const file = importCsvFile.files && importCsvFile.files[0];
+  if (!file) {
+    return;
+  }
+  importCsvFile.value = '';
+  window.AdminCommon.setPageMessage('');
+  importResult.textContent = 'Importing...';
+
+  try {
+    const csv = await file.text();
+    const result = await window.AdminCommon.requestJson('/api/admin/products/import', {
+      method: 'POST',
+      body: JSON.stringify({ csv })
+    });
+    if (!result) {
+      return;
+    }
+    const summary = window.AdminCommon.formatImportSummary(result);
+    importResult.textContent = [summary.text, ...summary.errorLines].join('\n');
+    importResult.classList.toggle('error', summary.hasErrors);
+    await loadProducts();
+  } catch (error) {
+    importResult.textContent = '';
     window.AdminCommon.setPageMessage(error.message, true);
   }
 });

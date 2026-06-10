@@ -16,14 +16,16 @@
         <a href="/admin/staff">Staff</a>
         <a class="active" href="/admin/label-templates">Labels</a>
         <a href="/admin/report">Report</a>
+        <a href="/admin/waste">Waste</a>
         <a href="/admin/audit-logs">Audit</a>
+        <a href="/admin/admins" data-nav="admins" hidden>Admins</a>
       </nav>
       <button id="logout-btn" type="button">Log Out</button>
     </header>
 
     <main class="dashboard-grid">
       <!-- Create form -->
-      <section class="panel">
+      <section class="panel" data-write>
         <h2>Create Template</h2>
         <form id="template-form" class="stack">
           <select id="template-brand" required></select>

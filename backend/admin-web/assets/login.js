@@ -19,12 +19,14 @@ form.addEventListener('submit', async (event) => {
       body: JSON.stringify(payload)
     });
 
+    const body = await response.json().catch(() => ({}));
+
     if (!response.ok) {
-      const body = await response.json().catch(() => ({}));
       errorEl.textContent = body.error || 'Login failed';
       return;
     }
 
+    window.AdminCommon.storeSession(body.user || {});
     window.location.href = '/admin';
   } catch (_error) {
     errorEl.textContent = 'Request failed. Try again.';

@@ -149,6 +149,14 @@ CREATE INDEX IF NOT EXISTS idx_binding_codes_store ON binding_codes(store_id);
 CREATE INDEX IF NOT EXISTS idx_reminders_store_expires ON reminders(store_id, expires_at);
 CREATE INDEX IF NOT EXISTS idx_store_staff_store ON store_staff(store_id);
 CREATE INDEX IF NOT EXISTS idx_label_templates_brand ON label_templates(brand_id);
+CREATE INDEX IF NOT EXISTS idx_reminders_batch ON reminders(batch_id);
+CREATE INDEX IF NOT EXISTS idx_reminders_store_status_expires ON reminders(store_id, status, expires_at);
+CREATE INDEX IF NOT EXISTS idx_handling_logs_store_handled ON handling_logs(store_id, handled_at);
+CREATE INDEX IF NOT EXISTS idx_handling_logs_reminder ON handling_logs(reminder_id);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_created ON audit_logs(created_at);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_actor_created ON audit_logs(actor_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_action_created ON audit_logs(action, created_at);
+CREATE INDEX IF NOT EXISTS idx_batches_store_product ON batches(store_id, product_id);
 `;
 
 function nowIso() {
@@ -167,6 +175,30 @@ function requirePositiveInteger(value, fieldName) {
     throw new Error(`${fieldName} must be a positive integer`);
   }
   return parsed;
+}
+
+// Normalizes list pagination params. Returns null when no limit is requested
+// (callers keep the legacy full-array behavior), otherwise { limit, offset }.
+function normalizePagination({ limit, offset } = {}) {
+  if (limit == null || limit === '') {
+    return null;
+  }
+  const normalizedLimit = Number(limit);
+  if (!Number.isInteger(normalizedLimit) || normalizedLimit <= 0) {
+    throw new Error('limit must be a positive integer');
+  }
+  let normalizedOffset = 0;
+  if (offset != null && offset !== '') {
+    normalizedOffset = Number(offset);
+    if (!Number.isInteger(normalizedOffset) || normalizedOffset < 0) {
+      throw new Error('offset must be a non-negative integer');
+    }
+  }
+  return { limit: normalizedLimit, offset: normalizedOffset };
+}
+
+function likeParam(q) {
+  return `%${String(q).trim()}%`;
 }
 
 function normalizeLabelLanguage(labelLanguage) {
@@ -317,6 +349,20 @@ async function createDb(filename) {
     await db.exec('ALTER TABLE batches ADD COLUMN printed_by_staff_id INTEGER');
   }
 
+  // Idempotent migration: brand-level reminder config (expiring threshold in days).
+  const brandColumns = await db.all('PRAGMA table_info(brands)');
+  if (!brandColumns.some((col) => col.name === 'reminder_threshold_days')) {
+    await db.exec('ALTER TABLE brands ADD COLUMN reminder_threshold_days INTEGER');
+  }
+
+  // Idempotent migration: brand scope on audit logs so brand admins only read
+  // their own brand's trail. Legacy rows stay NULL (visible to platform admins only).
+  const auditColumns = await db.all('PRAGMA table_info(audit_logs)');
+  if (!auditColumns.some((col) => col.name === 'brand_id')) {
+    await db.exec('ALTER TABLE audit_logs ADD COLUMN brand_id INTEGER');
+  }
+  await db.exec('CREATE INDEX IF NOT EXISTS idx_audit_logs_brand_created ON audit_logs(brand_id, created_at)');
+
   return db;
 }
 
@@ -329,7 +375,7 @@ async function closeDb(db) {
 
 async function getUserByEmail(db, email) {
   return db.get(
-    `SELECT id, email, password_hash, role, created_at
+    `SELECT id, email, password_hash, role, brand_id, created_at
      FROM users
      WHERE lower(email) = lower(?)`,
     email
@@ -577,31 +623,24 @@ async function createBindingCode(db, { storeId, code, expiresInHours = 24 }) {
   return getBindingCodeByCode(db, bindingCode);
 }
 
-async function listBindingCodes(db, { brandId } = {}) {
+async function listBindingCodes(db, { brandId, q, limit, offset } = {}) {
+  const whereClauses = ['1=1'];
+  const params = [];
+
   if (brandId != null) {
-    const normalizedBrandId = requirePositiveInteger(brandId, 'brandId');
-    return db.all(
-      `SELECT bc.id,
-              bc.brand_id AS brandId,
-              b.name AS brandName,
-              bc.store_id AS storeId,
-              s.name AS storeName,
-              bc.code,
-              bc.expires_at AS expiresAt,
-              bc.used_at AS usedAt,
-              bc.bound_device_id AS boundDeviceId,
-              bc.created_at AS createdAt
-       FROM binding_codes bc
-       JOIN stores s ON s.id = bc.store_id
-       JOIN brands b ON b.id = bc.brand_id
-       WHERE bc.brand_id = ?
-       ORDER BY bc.id DESC`,
-      normalizedBrandId
-    );
+    whereClauses.push('bc.brand_id = ?');
+    params.push(requirePositiveInteger(brandId, 'brandId'));
+  }
+  if (q != null && String(q).trim()) {
+    whereClauses.push('(bc.code LIKE ? OR s.name LIKE ?)');
+    params.push(likeParam(q), likeParam(q));
   }
 
-  return db.all(
-    `SELECT bc.id,
+  const fromSql = `FROM binding_codes bc
+     JOIN stores s ON s.id = bc.store_id
+     JOIN brands b ON b.id = bc.brand_id
+     WHERE ${whereClauses.join(' AND ')}`;
+  const selectSql = `SELECT bc.id,
             bc.brand_id AS brandId,
             b.name AS brandName,
             bc.store_id AS storeId,
@@ -611,11 +650,22 @@ async function listBindingCodes(db, { brandId } = {}) {
             bc.used_at AS usedAt,
             bc.bound_device_id AS boundDeviceId,
             bc.created_at AS createdAt
-     FROM binding_codes bc
-     JOIN stores s ON s.id = bc.store_id
-     JOIN brands b ON b.id = bc.brand_id
-     ORDER BY bc.id DESC`
+     ${fromSql}
+     ORDER BY bc.id DESC`;
+
+  const pagination = normalizePagination({ limit, offset });
+  if (!pagination) {
+    return db.all(selectSql, ...params);
+  }
+
+  const totalRow = await db.get(`SELECT COUNT(*) AS c ${fromSql}`, ...params);
+  const items = await db.all(
+    `${selectSql} LIMIT ? OFFSET ?`,
+    ...params,
+    pagination.limit,
+    pagination.offset
   );
+  return { items, total: Number(totalRow?.c || 0), limit: pagination.limit, offset: pagination.offset };
 }
 
 async function consumeBindingCode(db, { code, deviceId }) {
@@ -878,38 +928,26 @@ async function deleteProduct(db, productId) {
   return getProductById(db, normalizedProductId);
 }
 
-async function listProducts(db, { brandId, includeInactive = false } = {}) {
-  const activeSql = includeInactive ? '' : 'AND p.is_active = 1';
+async function listProducts(db, { brandId, includeInactive = false, q, limit, offset } = {}) {
+  const whereClauses = ['1=1'];
+  const params = [];
 
   if (brandId != null) {
-    const normalizedBrandId = requirePositiveInteger(brandId, 'brandId');
-    return db.all(
-      `SELECT p.id,
-              p.brand_id AS brandId,
-              b.name AS brandName,
-              p.name,
-              p.sku,
-              p.shelf_life_days AS shelfLifeDays,
-              p.label_language AS labelLanguage,
-              p.primary_language AS primaryLanguage,
-              p.secondary_language AS secondaryLanguage,
-              p.allergens,
-              p.storage_conditions AS storageConditions,
-              p.opened_shelf_life_hours AS openedShelfLifeHours,
-              p.is_active AS isActive,
-              p.created_at AS createdAt,
-              p.updated_at AS updatedAt
-       FROM products p
-       JOIN brands b ON b.id = p.brand_id
-       WHERE p.brand_id = ?
-       ${activeSql}
-       ORDER BY p.id ASC`,
-      normalizedBrandId
-    );
+    whereClauses.push('p.brand_id = ?');
+    params.push(requirePositiveInteger(brandId, 'brandId'));
+  }
+  if (!includeInactive) {
+    whereClauses.push('p.is_active = 1');
+  }
+  if (q != null && String(q).trim()) {
+    whereClauses.push('(p.name LIKE ? OR p.sku LIKE ?)');
+    params.push(likeParam(q), likeParam(q));
   }
 
-  return db.all(
-    `SELECT p.id,
+  const fromSql = `FROM products p
+     JOIN brands b ON b.id = p.brand_id
+     WHERE ${whereClauses.join(' AND ')}`;
+  const selectSql = `SELECT p.id,
             p.brand_id AS brandId,
             b.name AS brandName,
             p.name,
@@ -924,21 +962,31 @@ async function listProducts(db, { brandId, includeInactive = false } = {}) {
             p.is_active AS isActive,
             p.created_at AS createdAt,
             p.updated_at AS updatedAt
-     FROM products p
-     JOIN brands b ON b.id = p.brand_id
-     WHERE 1=1
-     ${activeSql}
-     ORDER BY p.id ASC`
+     ${fromSql}
+     ORDER BY p.id ASC`;
+
+  const pagination = normalizePagination({ limit, offset });
+  if (!pagination) {
+    return db.all(selectSql, ...params);
+  }
+
+  const totalRow = await db.get(`SELECT COUNT(*) AS c ${fromSql}`, ...params);
+  const items = await db.all(
+    `${selectSql} LIMIT ? OFFSET ?`,
+    ...params,
+    pagination.limit,
+    pagination.offset
   );
+  return { items, total: Number(totalRow?.c || 0), limit: pagination.limit, offset: pagination.offset };
 }
 
-async function listStoreProducts(db, storeId) {
+async function listStoreProducts(db, storeId, { q, limit, offset } = {}) {
   const store = await getStoreById(db, storeId);
   if (!store) {
     throw new Error('storeId not found');
   }
 
-  return listProducts(db, { brandId: store.brandId });
+  return listProducts(db, { brandId: store.brandId, q, limit, offset });
 }
 
 async function createBatchWithReminders(db, { storeId, productId, quantity, printedAt, staffId }) {
@@ -1064,10 +1112,24 @@ function normalizeReminderStatus(status) {
   return normalized;
 }
 
-async function listStoreReminders(db, { storeId, status = 'expiring', thresholdDays = 1 }) {
+async function listStoreReminders(db, { storeId, status = 'expiring', thresholdDays = null, q, limit, offset } = {}) {
   const normalizedStoreId = requirePositiveInteger(storeId, 'storeId');
   const normalizedStatus = normalizeReminderStatus(status);
-  const normalizedThresholdDays = Number(thresholdDays);
+
+  // When no explicit threshold is given, fall back to the brand-level reminder
+  // config (reminder_threshold_days), then to the historical default of 1 day.
+  let effectiveThresholdDays = thresholdDays;
+  if (effectiveThresholdDays == null || effectiveThresholdDays === '') {
+    const configRow = await db.get(
+      `SELECT b.reminder_threshold_days AS thresholdDays
+       FROM stores s
+       JOIN brands b ON b.id = s.brand_id
+       WHERE s.id = ?`,
+      normalizedStoreId
+    );
+    effectiveThresholdDays = configRow?.thresholdDays != null ? configRow.thresholdDays : 1;
+  }
+  const normalizedThresholdDays = Number(effectiveThresholdDays);
 
   if (!Number.isInteger(normalizedThresholdDays) || normalizedThresholdDays < 0) {
     throw new Error('thresholdDays must be a non-negative integer');
@@ -1084,8 +1146,20 @@ async function listStoreReminders(db, { storeId, status = 'expiring', thresholdD
     params.push(`+${normalizedThresholdDays} days`);
   }
 
-  return db.all(
-    `SELECT r.id,
+  let qSql = '';
+  if (q != null && String(q).trim()) {
+    qSql = 'AND p.name LIKE ?';
+    params.push(likeParam(q));
+  }
+
+  const fromSql = `FROM reminders r
+     JOIN products p ON p.id = r.product_id
+     WHERE r.store_id = ?
+       AND r.handled_at IS NULL
+       ${statusSql}
+       ${qSql}`;
+  // FIFO/FEFO: earliest-expiring unhandled reminder of each product is priority.
+  const selectSql = `SELECT r.id,
             r.batch_id AS batchId,
             r.store_id AS storeId,
             r.product_id AS productId,
@@ -1094,15 +1168,38 @@ async function listStoreReminders(db, { storeId, status = 'expiring', thresholdD
             r.expires_at AS expiresAt,
             r.status,
             r.handled_at AS handledAt,
-            r.created_at AS createdAt
-     FROM reminders r
-     JOIN products p ON p.id = r.product_id
-     WHERE r.store_id = ?
-       AND r.handled_at IS NULL
-       ${statusSql}
-     ORDER BY datetime(r.expires_at) ASC, r.id ASC`,
-    ...params
+            r.created_at AS createdAt,
+            CASE WHEN datetime(r.expires_at) = (
+              SELECT MIN(datetime(r2.expires_at))
+              FROM reminders r2
+              WHERE r2.store_id = r.store_id
+                AND r2.product_id = r.product_id
+                AND r2.handled_at IS NULL
+            ) THEN 1 ELSE 0 END AS is_priority
+     ${fromSql}
+     ORDER BY datetime(r.expires_at) ASC, r.id ASC`;
+
+  const toReminder = (row) => ({ ...row, is_priority: row.is_priority === 1 });
+
+  const pagination = normalizePagination({ limit, offset });
+  if (!pagination) {
+    const rows = await db.all(selectSql, ...params);
+    return rows.map(toReminder);
+  }
+
+  const totalRow = await db.get(`SELECT COUNT(*) AS c ${fromSql}`, ...params);
+  const rows = await db.all(
+    `${selectSql} LIMIT ? OFFSET ?`,
+    ...params,
+    pagination.limit,
+    pagination.offset
   );
+  return {
+    items: rows.map(toReminder),
+    total: Number(totalRow?.c || 0),
+    limit: pagination.limit,
+    offset: pagination.offset
+  };
 }
 
 async function handleReminder(db, { storeId, reminderId, reason, note, staffId }) {
@@ -1343,22 +1440,43 @@ async function createStoreStaff(db, { storeId, name, pin, role }) {
   return getStoreStaffById(db, result.lastID);
 }
 
-async function listStoreStaff(db, { storeId, includeInactive = false } = {}) {
+async function listStoreStaff(db, { storeId, includeInactive = false, q, limit, offset } = {}) {
   const normalizedStoreId = requirePositiveInteger(storeId, 'storeId');
-  const activeSql = includeInactive ? '' : 'AND is_active = 1';
-  return db.all(
-    `SELECT id,
+  const whereClauses = ['store_id = ?'];
+  const params = [normalizedStoreId];
+
+  if (!includeInactive) {
+    whereClauses.push('is_active = 1');
+  }
+  if (q != null && String(q).trim()) {
+    whereClauses.push('name LIKE ?');
+    params.push(likeParam(q));
+  }
+
+  const fromSql = `FROM store_staff
+     WHERE ${whereClauses.join(' AND ')}`;
+  const selectSql = `SELECT id,
             store_id AS storeId,
             name,
             role,
             is_active AS isActive,
             created_at AS createdAt
-     FROM store_staff
-     WHERE store_id = ?
-     ${activeSql}
-     ORDER BY id ASC`,
-    normalizedStoreId
+     ${fromSql}
+     ORDER BY id ASC`;
+
+  const pagination = normalizePagination({ limit, offset });
+  if (!pagination) {
+    return db.all(selectSql, ...params);
+  }
+
+  const totalRow = await db.get(`SELECT COUNT(*) AS c ${fromSql}`, ...params);
+  const items = await db.all(
+    `${selectSql} LIMIT ? OFFSET ?`,
+    ...params,
+    pagination.limit,
+    pagination.offset
   );
+  return { items, total: Number(totalRow?.c || 0), limit: pagination.limit, offset: pagination.offset };
 }
 
 async function updateStoreStaff(db, staffId, fields = {}) {
@@ -1532,27 +1650,22 @@ async function createLabelTemplate(db, { brandId, name, widthMm, heightMm, dpi, 
   }
 }
 
-async function listLabelTemplates(db, { brandId } = {}) {
+async function listLabelTemplates(db, { brandId, q, limit, offset } = {}) {
+  const whereClauses = ['1=1'];
+  const params = [];
+
   if (brandId != null) {
-    const normalizedBrandId = requirePositiveInteger(brandId, 'brandId');
-    return db.all(
-      `SELECT id,
-              brand_id AS brandId,
-              name,
-              width_mm AS widthMm,
-              height_mm AS heightMm,
-              dpi,
-              body_template AS bodyTemplate,
-              is_default AS isDefault,
-              created_at AS createdAt
-       FROM label_templates
-       WHERE brand_id = ?
-       ORDER BY id ASC`,
-      normalizedBrandId
-    );
+    whereClauses.push('brand_id = ?');
+    params.push(requirePositiveInteger(brandId, 'brandId'));
   }
-  return db.all(
-    `SELECT id,
+  if (q != null && String(q).trim()) {
+    whereClauses.push('name LIKE ?');
+    params.push(likeParam(q));
+  }
+
+  const fromSql = `FROM label_templates
+     WHERE ${whereClauses.join(' AND ')}`;
+  const selectSql = `SELECT id,
             brand_id AS brandId,
             name,
             width_mm AS widthMm,
@@ -1561,9 +1674,22 @@ async function listLabelTemplates(db, { brandId } = {}) {
             body_template AS bodyTemplate,
             is_default AS isDefault,
             created_at AS createdAt
-     FROM label_templates
-     ORDER BY id ASC`
+     ${fromSql}
+     ORDER BY id ASC`;
+
+  const pagination = normalizePagination({ limit, offset });
+  if (!pagination) {
+    return db.all(selectSql, ...params);
+  }
+
+  const totalRow = await db.get(`SELECT COUNT(*) AS c ${fromSql}`, ...params);
+  const items = await db.all(
+    `${selectSql} LIMIT ? OFFSET ?`,
+    ...params,
+    pagination.limit,
+    pagination.offset
   );
+  return { items, total: Number(totalRow?.c || 0), limit: pagination.limit, offset: pagination.offset };
 }
 
 const LABEL_TEMPLATE_COLUMN_MAP = {
@@ -1671,66 +1797,49 @@ async function getDashboardSummary(db, { brandId } = {}) {
     ? await db.get('SELECT COUNT(*) AS c FROM brands')
     : { c: (await getBrandById(db, brandId)) ? 1 : 0 };
 
-  const storeRow = await db.get(
-    `SELECT COUNT(*) AS c FROM stores s WHERE 1=1 ${storeScope}`,
-    ...storeParams
-  );
-
   const productParams = [];
   const productScope = brandScopeClause(brandId, 'p', productParams);
-  const productRow = await db.get(
-    `SELECT COUNT(*) AS c FROM products p WHERE 1=1 ${productScope}`,
+  const countsRow = await db.get(
+    `SELECT
+        (SELECT COUNT(*) FROM stores s WHERE 1=1 ${storeScope}) AS storeCount,
+        (SELECT COUNT(*) FROM products p WHERE 1=1 ${productScope}) AS productCount`,
+    ...storeParams,
     ...productParams
   );
 
-  const expParams = [];
-  const expScope = brandScopeClause(brandId, 's', expParams);
-  const todayRow = await db.get(
-    `SELECT COUNT(*) AS c
-     FROM reminders r
-     JOIN stores s ON s.id = r.store_id
-     WHERE r.handled_at IS NULL
-       AND datetime(r.expires_at) >= datetime('now')
-       AND datetime(r.expires_at) <= datetime('now', '+1 day')
-       ${expScope}`,
-    ...expParams
-  );
-
-  const unhandledParams = [];
-  const unhandledScope = brandScopeClause(brandId, 's', unhandledParams);
-  const unhandledRow = await db.get(
-    `SELECT COUNT(*) AS c
-     FROM reminders r
-     JOIN stores s ON s.id = r.store_id
-     WHERE r.handled_at IS NULL
-       AND datetime(r.expires_at) < datetime('now')
-       ${unhandledScope}`,
-    ...unhandledParams
-  );
-
-  const rateParams = [];
-  const rateScope = brandScopeClause(brandId, 's', rateParams);
-  const rateRow = await db.get(
+  // Single pass over the relevant reminders (pending ones plus the last 30 days)
+  // instead of three separate COUNT scans.
+  const reminderParams = [];
+  const reminderScope = brandScopeClause(brandId, 's', reminderParams);
+  const reminderRow = await db.get(
     `SELECT
-        SUM(CASE WHEN datetime(r.expires_at) < datetime('now') THEN 1 ELSE 0 END) AS total,
-        SUM(CASE WHEN datetime(r.expires_at) < datetime('now') AND r.handled_at IS NOT NULL THEN 1 ELSE 0 END) AS handled
+        SUM(CASE WHEN r.handled_at IS NULL
+                 AND datetime(r.expires_at) >= datetime('now')
+                 AND datetime(r.expires_at) <= datetime('now', '+1 day') THEN 1 ELSE 0 END) AS todayExpiring,
+        SUM(CASE WHEN r.handled_at IS NULL
+                 AND datetime(r.expires_at) < datetime('now') THEN 1 ELSE 0 END) AS unhandledExpired,
+        SUM(CASE WHEN datetime(r.expires_at) >= datetime('now', '-30 day')
+                 AND datetime(r.expires_at) < datetime('now') THEN 1 ELSE 0 END) AS rateTotal,
+        SUM(CASE WHEN datetime(r.expires_at) >= datetime('now', '-30 day')
+                 AND datetime(r.expires_at) < datetime('now')
+                 AND r.handled_at IS NOT NULL THEN 1 ELSE 0 END) AS rateHandled
      FROM reminders r
      JOIN stores s ON s.id = r.store_id
-     WHERE datetime(r.expires_at) >= datetime('now', '-30 day')
-       ${rateScope}`,
-    ...rateParams
+     WHERE (r.handled_at IS NULL OR datetime(r.expires_at) >= datetime('now', '-30 day'))
+       ${reminderScope}`,
+    ...reminderParams
   );
 
-  const total = Number(rateRow?.total || 0);
-  const handled = Number(rateRow?.handled || 0);
+  const total = Number(reminderRow?.rateTotal || 0);
+  const handled = Number(reminderRow?.rateHandled || 0);
   const handledRate = total > 0 ? handled / total : 0;
 
   return {
     brands: Number(brandCountRow?.c || 0),
-    stores: Number(storeRow?.c || 0),
-    products: Number(productRow?.c || 0),
-    todayExpiringCount: Number(todayRow?.c || 0),
-    unhandledExpiredCount: Number(unhandledRow?.c || 0),
+    stores: Number(countsRow?.storeCount || 0),
+    products: Number(countsRow?.productCount || 0),
+    todayExpiringCount: Number(reminderRow?.todayExpiring || 0),
+    unhandledExpiredCount: Number(reminderRow?.unhandledExpired || 0),
     handledRate
   };
 }
@@ -1800,12 +1909,12 @@ async function getInspectionScoreTrend(db, { brandId, days = 30 } = {}) {
   );
 }
 
-function recordAudit(db, { actorType, actorId, action, targetType, targetId, detail, ip }) {
+function recordAudit(db, { actorType, actorId, action, targetType, targetId, detail, ip, brandId }) {
   // Audit logging must never break the main flow; swallow any error.
   return db
     .run(
-      `INSERT INTO audit_logs (actor_type, actor_id, action, target_type, target_id, detail, ip, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO audit_logs (actor_type, actor_id, action, target_type, target_id, detail, ip, brand_id, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       actorType != null ? String(actorType) : null,
       actorId != null ? String(actorId) : null,
       action != null ? String(action) : null,
@@ -1813,6 +1922,7 @@ function recordAudit(db, { actorType, actorId, action, targetType, targetId, det
       targetId != null ? String(targetId) : null,
       detail != null ? String(detail) : null,
       ip != null ? String(ip) : null,
+      brandId != null ? Number(brandId) : null,
       nowIso()
     )
     .catch((error) => {
@@ -1820,10 +1930,38 @@ function recordAudit(db, { actorType, actorId, action, targetType, targetId, det
     });
 }
 
-async function listAuditLogs(db, { limit = 100 } = {}) {
-  const normalizedLimit = Number.isInteger(Number(limit)) && Number(limit) > 0 ? Number(limit) : 100;
-  return db.all(
-    `SELECT id,
+async function listAuditLogs(db, { brandId, actor, action, from, to, q, limit, offset } = {}) {
+  const whereClauses = ['1=1'];
+  const params = [];
+
+  if (brandId != null) {
+    whereClauses.push('brand_id = ?');
+    params.push(requirePositiveInteger(brandId, 'brandId'));
+  }
+  if (actor != null && String(actor).trim()) {
+    whereClauses.push('actor_id = ?');
+    params.push(String(actor).trim());
+  }
+  if (action != null && String(action).trim()) {
+    whereClauses.push('action = ?');
+    params.push(String(action).trim());
+  }
+  if (from != null && String(from).trim()) {
+    whereClauses.push('datetime(created_at) >= datetime(?)');
+    params.push(String(from).trim());
+  }
+  if (to != null && String(to).trim()) {
+    whereClauses.push('datetime(created_at) <= datetime(?)');
+    params.push(String(to).trim());
+  }
+  if (q != null && String(q).trim()) {
+    whereClauses.push('(actor_id LIKE ? OR action LIKE ? OR target_type LIKE ? OR target_id LIKE ? OR detail LIKE ?)');
+    params.push(likeParam(q), likeParam(q), likeParam(q), likeParam(q), likeParam(q));
+  }
+
+  const fromSql = `FROM audit_logs
+     WHERE ${whereClauses.join(' AND ')}`;
+  const selectSql = `SELECT id,
             actor_type AS actorType,
             actor_id AS actorId,
             action,
@@ -1831,15 +1969,28 @@ async function listAuditLogs(db, { limit = 100 } = {}) {
             target_id AS targetId,
             detail,
             ip,
+            brand_id AS brandId,
             created_at AS createdAt
-     FROM audit_logs
-     ORDER BY id DESC
-     LIMIT ?`,
-    normalizedLimit
+     ${fromSql}
+     ORDER BY id DESC`;
+
+  const pagination = normalizePagination({ limit, offset });
+  if (!pagination) {
+    // Legacy behavior: capped array response.
+    return db.all(`${selectSql} LIMIT ?`, ...params, 100);
+  }
+
+  const totalRow = await db.get(`SELECT COUNT(*) AS c ${fromSql}`, ...params);
+  const items = await db.all(
+    `${selectSql} LIMIT ? OFFSET ?`,
+    ...params,
+    pagination.limit,
+    pagination.offset
   );
+  return { items, total: Number(totalRow?.c || 0), limit: pagination.limit, offset: pagination.offset };
 }
 
-async function listExpiredHandlingReport(db, { brandId, startDate, endDate } = {}) {
+async function listExpiredHandlingReport(db, { brandId, startDate, endDate, q, limit, offset } = {}) {
   const params = [];
   const whereClauses = [];
 
@@ -1860,11 +2011,15 @@ async function listExpiredHandlingReport(db, { brandId, startDate, endDate } = {
     whereClauses.push(`datetime(${effectiveDate}) <= datetime(?)`);
     params.push(String(endDate).trim());
   }
+  if (q != null && String(q).trim()) {
+    whereClauses.push('(s.name LIKE ? OR p.name LIKE ?)');
+    params.push(likeParam(q), likeParam(q));
+  }
 
   const whereSql = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
 
-  return db.all(
-    `SELECT s.id AS storeId,
+  // FEFO: report rows ordered by the earliest expiry first.
+  const selectSql = `SELECT s.id AS storeId,
             s.name AS storeName,
             p.id AS productId,
             p.name AS productName,
@@ -1882,9 +2037,127 @@ async function listExpiredHandlingReport(db, { brandId, startDate, endDate } = {
      ${whereSql}
      GROUP BY s.id, p.id
      HAVING SUM(CASE WHEN datetime(r.expires_at) < datetime('now') THEN 1 ELSE 0 END) > 0
-     ORDER BY s.id ASC, p.id ASC`,
-    ...params
+     ORDER BY MIN(datetime(r.expires_at)) ASC, s.id ASC, p.id ASC`;
+
+  const pagination = normalizePagination({ limit, offset });
+  if (!pagination) {
+    return db.all(selectSql, ...params);
+  }
+
+  const totalRow = await db.get(`SELECT COUNT(*) AS c FROM (${selectSql})`, ...params);
+  const items = await db.all(
+    `${selectSql} LIMIT ? OFFSET ?`,
+    ...params,
+    pagination.limit,
+    pagination.offset
   );
+  return { items, total: Number(totalRow?.c || 0), limit: pagination.limit, offset: pagination.offset };
+}
+
+// ─── Brand-level reminder config (expiring threshold, in days) ───────────────
+
+async function getBrandReminderConfig(db, brandId) {
+  const normalizedBrandId = requirePositiveInteger(brandId, 'brandId');
+  const row = await db.get(
+    `SELECT id, reminder_threshold_days AS thresholdDays
+     FROM brands
+     WHERE id = ?`,
+    normalizedBrandId
+  );
+  if (!row) {
+    throw new Error('brandId not found');
+  }
+  return {
+    brandId: row.id,
+    thresholdDays: row.thresholdDays != null ? row.thresholdDays : 1
+  };
+}
+
+async function updateBrandReminderConfig(db, brandId, { thresholdDays } = {}) {
+  const normalizedBrandId = requirePositiveInteger(brandId, 'brandId');
+  const brand = await getBrandById(db, normalizedBrandId);
+  if (!brand) {
+    throw new Error('brandId not found');
+  }
+
+  const normalizedThresholdDays = Number(thresholdDays);
+  if (!Number.isInteger(normalizedThresholdDays) || normalizedThresholdDays < 0) {
+    throw new Error('thresholdDays must be a non-negative integer');
+  }
+
+  await db.run(
+    'UPDATE brands SET reminder_threshold_days = ? WHERE id = ?',
+    normalizedThresholdDays,
+    normalizedBrandId
+  );
+
+  return getBrandReminderConfig(db, normalizedBrandId);
+}
+
+// ─── P0-1: Proactive reminder scan (cron) ────────────────────────────────────
+// Reminders are created with each batch at print time, so the periodic scan is
+// a safety net + status refresher. All steps are idempotent:
+//   1. Backfill reminders for batches that lost them (zero rows for the batch).
+//   2. Mark unhandled, already-expired reminders as 'overdue'.
+//   3. Mark unhandled reminders inside the brand expiring window (in days,
+//      from brands.reminder_threshold_days, default 1) as 'expiring'.
+// Status only moves forward (pending -> expiring -> overdue), never repeats,
+// and list queries filter on handled_at/expires_at so nothing breaks.
+async function runReminderScan(db) {
+  const orphanBatches = await db.all(
+    `SELECT b.id,
+            b.store_id AS storeId,
+            b.product_id AS productId,
+            b.quantity,
+            b.expires_at AS expiresAt,
+            b.printed_by_staff_id AS staffId
+     FROM batches b
+     WHERE NOT EXISTS (SELECT 1 FROM reminders r WHERE r.batch_id = b.id)`
+  );
+
+  let backfilled = 0;
+  for (const batch of orphanBatches) {
+    for (let index = 0; index < batch.quantity; index += 1) {
+      await db.run(
+        `INSERT INTO reminders (batch_id, store_id, product_id, expires_at, status, staff_id)
+         VALUES (?, ?, ?, ?, 'pending', ?)`,
+        batch.id,
+        batch.storeId,
+        batch.productId,
+        batch.expiresAt,
+        batch.staffId
+      );
+      backfilled += 1;
+    }
+  }
+
+  const overdueResult = await db.run(
+    `UPDATE reminders
+     SET status = 'overdue'
+     WHERE handled_at IS NULL
+       AND status != 'overdue'
+       AND datetime(expires_at) < datetime('now')`
+  );
+
+  const expiringResult = await db.run(
+    `UPDATE reminders
+     SET status = 'expiring'
+     WHERE handled_at IS NULL
+       AND status = 'pending'
+       AND datetime(expires_at) >= datetime('now')
+       AND datetime(expires_at) <= datetime('now', '+' || (
+         SELECT COALESCE(b.reminder_threshold_days, 1)
+         FROM stores s
+         JOIN brands b ON b.id = s.brand_id
+         WHERE s.id = reminders.store_id
+       ) || ' days')`
+  );
+
+  return {
+    backfilled,
+    markedOverdue: Number(overdueResult.changes || 0),
+    markedExpiring: Number(expiringResult.changes || 0)
+  };
 }
 
 module.exports = {
@@ -1905,6 +2178,7 @@ module.exports = {
   deleteLabelTemplate,
   deleteProduct,
   ensureAdminUser,
+  getBrandReminderConfig,
   getDashboardSummary,
   getDefaultLabelTemplate,
   getInspectionScoreTrend,
@@ -1931,6 +2205,8 @@ module.exports = {
   recordAudit,
   renderLabelFromTemplate,
   renderLabelTemplate,
+  runReminderScan,
+  updateBrandReminderConfig,
   updateLabelTemplate,
   updateProduct,
   updateStoreStaff,

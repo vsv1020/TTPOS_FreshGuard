@@ -26,6 +26,7 @@ const {
   deactivateStoreStaff,
   deleteLabelTemplate,
   deleteProduct,
+  getBrandReminderConfig,
   getDashboardSummary,
   getInspectionScoreTrend,
   getLabelTemplateById,
@@ -50,6 +51,7 @@ const {
   openReminder,
   recordAudit,
   renderLabelFromTemplate,
+  updateBrandReminderConfig,
   updateLabelTemplate,
   updateProduct,
   updateStoreStaff,
@@ -77,6 +79,16 @@ function respondDataError(res, error) {
   }
 
   return res.status(400).json({ error: message });
+}
+
+// Pagination contract: list db functions return a plain array when no `limit`
+// query param is given (legacy shape) and an { items, total, limit, offset }
+// envelope when `limit` is present. `key` names the legacy wrapper property.
+function sendList(res, key, result) {
+  if (Array.isArray(result)) {
+    return res.json({ [key]: result });
+  }
+  return res.json(result);
 }
 
 function csvEscape(value) {
@@ -174,7 +186,8 @@ function buildApp({ db, jwtSecret, adminWebDir }) {
       action: 'login',
       targetType: 'user',
       targetId: user.id,
-      ip: req.ip
+      ip: req.ip,
+      brandId: user.brand_id
     });
 
     res.cookie(COOKIE_NAME, token, {
@@ -220,7 +233,55 @@ function buildApp({ db, jwtSecret, adminWebDir }) {
   app.post('/api/admin/brands', adminApiAuth, async (req, res) => {
     try {
       const brand = await createBrand(db, { name: req.body?.name });
+      recordAudit(db, {
+        actorType: 'admin',
+        actorId: req.admin.email,
+        action: 'brand.create',
+        targetType: 'brand',
+        targetId: brand.id,
+        detail: brand.name,
+        ip: req.ip,
+        brandId: brand.id
+      });
       return res.status(201).json({ brand });
+    } catch (error) {
+      return respondDataError(res, error);
+    }
+  });
+
+  // Brand-level reminder config: expiring threshold (days) used as the default
+  // for store reminder queries when no explicit thresholdDays is given.
+  app.get('/api/admin/brands/:id/reminder-config', adminApiAuth, async (req, res) => {
+    try {
+      if (req.admin.brandId != null && Number(req.params.id) !== req.admin.brandId) {
+        return res.status(403).json({ error: 'Forbidden' });
+      }
+      const reminderConfig = await getBrandReminderConfig(db, req.params.id);
+      return res.json({ reminderConfig });
+    } catch (error) {
+      return respondDataError(res, error);
+    }
+  });
+
+  app.put('/api/admin/brands/:id/reminder-config', adminApiAuth, async (req, res) => {
+    try {
+      if (req.admin.brandId != null && Number(req.params.id) !== req.admin.brandId) {
+        return res.status(403).json({ error: 'Forbidden' });
+      }
+      const reminderConfig = await updateBrandReminderConfig(db, req.params.id, {
+        thresholdDays: req.body?.thresholdDays
+      });
+      recordAudit(db, {
+        actorType: 'admin',
+        actorId: req.admin.email,
+        action: 'brand.reminder-config.update',
+        targetType: 'brand',
+        targetId: reminderConfig.brandId,
+        detail: `thresholdDays=${reminderConfig.thresholdDays}`,
+        ip: req.ip,
+        brandId: reminderConfig.brandId
+      });
+      return res.json({ reminderConfig });
     } catch (error) {
       return respondDataError(res, error);
     }
@@ -238,6 +299,16 @@ function buildApp({ db, jwtSecret, adminWebDir }) {
         brandId: req.body?.brandId,
         name: req.body?.name
       });
+      recordAudit(db, {
+        actorType: 'admin',
+        actorId: req.admin.email,
+        action: 'store.create',
+        targetType: 'store',
+        targetId: store.id,
+        detail: store.name,
+        ip: req.ip,
+        brandId: store.brandId
+      });
       return res.status(201).json({ store });
     } catch (error) {
       return respondDataError(res, error);
@@ -254,6 +325,16 @@ function buildApp({ db, jwtSecret, adminWebDir }) {
         printerDpi: req.body?.printerDpi,
         labelWidthMm: req.body?.labelWidthMm
       });
+      recordAudit(db, {
+        actorType: 'admin',
+        actorId: req.admin.email,
+        action: 'store.printer-settings.update',
+        targetType: 'store',
+        targetId: store.id,
+        detail: store.name,
+        ip: req.ip,
+        brandId: store.brandId
+      });
       return res.json({ store });
     } catch (error) {
       return respondDataError(res, error);
@@ -261,9 +342,18 @@ function buildApp({ db, jwtSecret, adminWebDir }) {
   });
 
   app.get('/api/admin/binding-codes', adminApiAuth, async (req, res) => {
-    const brandId = req.admin.brandId != null ? req.admin.brandId : undefined;
-    const bindingCodes = await listBindingCodes(db, { brandId });
-    return res.json({ bindingCodes });
+    try {
+      const brandId = req.admin.brandId != null ? req.admin.brandId : undefined;
+      const result = await listBindingCodes(db, {
+        brandId,
+        q: req.query.q,
+        limit: req.query.limit,
+        offset: req.query.offset
+      });
+      return sendList(res, 'bindingCodes', result);
+    } catch (error) {
+      return respondDataError(res, error);
+    }
   });
 
   app.post('/api/admin/binding-codes', adminApiAuth, async (req, res) => {
@@ -272,6 +362,16 @@ function buildApp({ db, jwtSecret, adminWebDir }) {
         storeId: req.body?.storeId,
         expiresInHours: req.body?.expiresInHours,
         code: req.body?.code
+      });
+      recordAudit(db, {
+        actorType: 'admin',
+        actorId: req.admin.email,
+        action: 'binding-code.create',
+        targetType: 'binding-code',
+        targetId: bindingCode.id,
+        detail: `store=${bindingCode.storeId}`,
+        ip: req.ip,
+        brandId: bindingCode.brandId
       });
       return res.status(201).json({ bindingCode });
     } catch (error) {
@@ -282,8 +382,13 @@ function buildApp({ db, jwtSecret, adminWebDir }) {
   app.get('/api/admin/products', adminApiAuth, async (req, res) => {
     try {
       const effectiveBrandId = req.admin.brandId != null ? req.admin.brandId : req.query.brandId;
-      const products = await listProducts(db, { brandId: effectiveBrandId });
-      return res.json({ products });
+      const result = await listProducts(db, {
+        brandId: effectiveBrandId,
+        q: req.query.q,
+        limit: req.query.limit,
+        offset: req.query.offset
+      });
+      return sendList(res, 'products', result);
     } catch (error) {
       return respondDataError(res, error);
     }
@@ -310,7 +415,8 @@ function buildApp({ db, jwtSecret, adminWebDir }) {
         targetType: 'product',
         targetId: product.id,
         detail: product.name,
-        ip: req.ip
+        ip: req.ip,
+        brandId: product.brandId
       });
       return res.status(201).json({ product });
     } catch (error) {
@@ -346,7 +452,8 @@ function buildApp({ db, jwtSecret, adminWebDir }) {
         targetType: 'product',
         targetId: product.id,
         detail: product.name,
-        ip: req.ip
+        ip: req.ip,
+        brandId: product.brandId
       });
       return res.json({ product });
     } catch (error) {
@@ -372,7 +479,8 @@ function buildApp({ db, jwtSecret, adminWebDir }) {
         targetType: 'product',
         targetId: product.id,
         detail: product.name,
-        ip: req.ip
+        ip: req.ip,
+        brandId: product.brandId
       });
       return res.json({ product });
     } catch (error) {
@@ -383,11 +491,15 @@ function buildApp({ db, jwtSecret, adminWebDir }) {
   app.get('/api/admin/reports/expired-handling', adminApiAuth, async (req, res) => {
     try {
       const brandId = req.admin.brandId != null ? req.admin.brandId : undefined;
-      const rows = await listExpiredHandlingReport(db, {
+      const result = await listExpiredHandlingReport(db, {
         brandId,
-        startDate: req.query.startDate,
-        endDate: req.query.endDate
+        startDate: req.query.startDate != null ? req.query.startDate : req.query.from,
+        endDate: req.query.endDate != null ? req.query.endDate : req.query.to,
+        q: req.query.q,
+        limit: req.query.limit,
+        offset: req.query.offset
       });
+      const rows = Array.isArray(result) ? result : result.items;
 
       if (req.query.format === 'csv') {
         return sendCsv(
@@ -409,6 +521,9 @@ function buildApp({ db, jwtSecret, adminWebDir }) {
         );
       }
 
+      if (!Array.isArray(result)) {
+        return res.json(result);
+      }
       return res.json({ rows });
     } catch (error) {
       return respondDataError(res, error);
@@ -417,12 +532,17 @@ function buildApp({ db, jwtSecret, adminWebDir }) {
 
   app.get('/api/admin/reports/inspections', adminApiAuth, async (req, res) => {
     try {
-      const rows = await listInspections(db, {
+      const hasLimit = req.query.limit != null && req.query.limit !== '' && req.query.format !== 'csv';
+      const result = await listInspections(db, {
         storeId: req.query.storeId,
         templateId: req.query.templateId,
         status: req.query.status,
-        limit: req.query.limit ? Number(req.query.limit) : undefined
+        q: req.query.q,
+        limit: req.query.limit ? Number(req.query.limit) : undefined,
+        offset: req.query.offset ? Number(req.query.offset) : 0,
+        includeTotal: hasLimit
       });
+      const rows = Array.isArray(result) ? result : result.items;
 
       if (req.query.format === 'csv') {
         return sendCsv(
@@ -445,6 +565,9 @@ function buildApp({ db, jwtSecret, adminWebDir }) {
         );
       }
 
+      if (!Array.isArray(result)) {
+        return res.json(result);
+      }
       return res.json({ rows });
     } catch (error) {
       return respondDataError(res, error);
@@ -453,9 +576,18 @@ function buildApp({ db, jwtSecret, adminWebDir }) {
 
   app.get('/api/admin/audit-logs', adminApiAuth, async (req, res) => {
     try {
-      const limit = req.query.limit ? Number(req.query.limit) : 100;
-      const logs = await listAuditLogs(db, { limit });
-      return res.json({ logs });
+      // Brand-scoped admins only read their own brand's trail; platform admins see all.
+      const result = await listAuditLogs(db, {
+        brandId: req.admin.brandId != null ? req.admin.brandId : undefined,
+        actor: req.query.actor,
+        action: req.query.action,
+        from: req.query.from,
+        to: req.query.to,
+        q: req.query.q,
+        limit: req.query.limit,
+        offset: req.query.offset
+      });
+      return sendList(res, 'logs', result);
     } catch (error) {
       return respondDataError(res, error);
     }
@@ -480,8 +612,14 @@ function buildApp({ db, jwtSecret, adminWebDir }) {
     try {
       const store = await assertStoreInScope(req, res, req.params.storeId);
       if (!store) return undefined;
-      const staff = await listStoreStaff(db, { storeId: req.params.storeId, includeInactive: true });
-      return res.json({ staff });
+      const result = await listStoreStaff(db, {
+        storeId: req.params.storeId,
+        includeInactive: true,
+        q: req.query.q,
+        limit: req.query.limit,
+        offset: req.query.offset
+      });
+      return sendList(res, 'staff', result);
     } catch (error) {
       return respondDataError(res, error);
     }
@@ -504,7 +642,8 @@ function buildApp({ db, jwtSecret, adminWebDir }) {
         targetType: 'staff',
         targetId: staff.id,
         detail: staff.name,
-        ip: req.ip
+        ip: req.ip,
+        brandId: store.brandId
       });
       return res.status(201).json({ staff });
     } catch (error) {
@@ -533,7 +672,8 @@ function buildApp({ db, jwtSecret, adminWebDir }) {
         targetType: 'staff',
         targetId: staff.id,
         detail: staff.name,
-        ip: req.ip
+        ip: req.ip,
+        brandId: store.brandId
       });
       return res.json({ staff });
     } catch (error) {
@@ -557,7 +697,8 @@ function buildApp({ db, jwtSecret, adminWebDir }) {
         targetType: 'staff',
         targetId: staff.id,
         detail: staff.name,
-        ip: req.ip
+        ip: req.ip,
+        brandId: store.brandId
       });
       return res.json({ staff });
     } catch (error) {
@@ -625,8 +766,13 @@ function buildApp({ db, jwtSecret, adminWebDir }) {
   app.get('/api/admin/label-templates', adminApiAuth, async (req, res) => {
     try {
       const brandId = req.admin.brandId != null ? req.admin.brandId : (req.query.brandId || undefined);
-      const templates = await listLabelTemplates(db, { brandId });
-      return res.json({ templates });
+      const result = await listLabelTemplates(db, {
+        brandId,
+        q: req.query.q,
+        limit: req.query.limit,
+        offset: req.query.offset
+      });
+      return sendList(res, 'templates', result);
     } catch (error) {
       return respondDataError(res, error);
     }
@@ -650,7 +796,8 @@ function buildApp({ db, jwtSecret, adminWebDir }) {
         targetType: 'label-template',
         targetId: template.id,
         detail: template.name,
-        ip: req.ip
+        ip: req.ip,
+        brandId: template.brandId
       });
       return res.status(201).json({ template });
     } catch (error) {
@@ -682,7 +829,8 @@ function buildApp({ db, jwtSecret, adminWebDir }) {
         targetType: 'label-template',
         targetId: template.id,
         detail: template.name,
-        ip: req.ip
+        ip: req.ip,
+        brandId: template.brandId
       });
       return res.json({ template });
     } catch (error) {
@@ -707,7 +855,8 @@ function buildApp({ db, jwtSecret, adminWebDir }) {
         targetType: 'label-template',
         targetId: template.id,
         detail: template.name,
-        ip: req.ip
+        ip: req.ip,
+        brandId: template.brandId
       });
       return res.json({ template });
     } catch (error) {
@@ -761,8 +910,12 @@ function buildApp({ db, jwtSecret, adminWebDir }) {
 
   app.get('/api/store/products', storeApiAuth, async (req, res) => {
     try {
-      const products = await listStoreProducts(db, req.storeAuth.storeId);
-      return res.json({ products });
+      const result = await listStoreProducts(db, req.storeAuth.storeId, {
+        q: req.query.q,
+        limit: req.query.limit,
+        offset: req.query.offset
+      });
+      return sendList(res, 'products', result);
     } catch (error) {
       return respondDataError(res, error);
     }
@@ -807,7 +960,8 @@ function buildApp({ db, jwtSecret, adminWebDir }) {
         targetType: 'batch',
         targetId: result.batch.id,
         detail: `qty=${result.batch.quantity}${req.body?.staffId != null ? ` staff=${req.body.staffId}` : ''}`,
-        ip: req.ip
+        ip: req.ip,
+        brandId: req.storeAuth.brandId
       });
 
       return res.status(201).json(result);
@@ -818,13 +972,16 @@ function buildApp({ db, jwtSecret, adminWebDir }) {
 
   app.get('/api/store/reminders', storeApiAuth, async (req, res) => {
     try {
-      const reminders = await listStoreReminders(db, {
+      const result = await listStoreReminders(db, {
         storeId: req.storeAuth.storeId,
         status: req.query.status,
-        thresholdDays: req.query.thresholdDays
+        thresholdDays: req.query.thresholdDays,
+        q: req.query.q,
+        limit: req.query.limit,
+        offset: req.query.offset
       });
 
-      return res.json({ reminders });
+      return sendList(res, 'reminders', result);
     } catch (error) {
       return respondDataError(res, error);
     }
@@ -847,7 +1004,8 @@ function buildApp({ db, jwtSecret, adminWebDir }) {
         targetType: 'reminder',
         targetId: reminder.id,
         detail: `${String(req.body?.reason || '')}${req.body?.staffId != null ? ` staff=${req.body.staffId}` : ''}`,
-        ip: req.ip
+        ip: req.ip,
+        brandId: req.storeAuth.brandId
       });
 
       return res.json({ reminder });
@@ -871,7 +1029,8 @@ function buildApp({ db, jwtSecret, adminWebDir }) {
         targetType: 'reminder',
         targetId: result.reminder.id,
         detail: req.body?.staffId != null ? `staff=${req.body.staffId}` : null,
-        ip: req.ip
+        ip: req.ip,
+        brandId: req.storeAuth.brandId
       });
 
       return res.status(201).json(result);

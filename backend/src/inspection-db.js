@@ -152,6 +152,18 @@ async function initInspectionSchema(db) {
   if (!resColNames.has('max_score_snapshot')) {
     await db.run('ALTER TABLE inspection_results ADD COLUMN max_score_snapshot INTEGER');
   }
+
+  // Idempotent indexes for the common list/dashboard query paths.
+  // Created after the migrations above so they survive the table-recreate path.
+  await db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_inspections_store_created ON inspections(store_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_inspections_template ON inspections(template_id);
+    CREATE INDEX IF NOT EXISTS idx_inspections_status ON inspections(status);
+    CREATE INDEX IF NOT EXISTS idx_inspection_results_inspection ON inspection_results(inspection_id);
+    CREATE INDEX IF NOT EXISTS idx_check_items_template ON check_items(template_id);
+    CREATE INDEX IF NOT EXISTS idx_issues_store_status ON issues(store_id, status);
+    CREATE INDEX IF NOT EXISTS idx_issues_inspection ON issues(inspection_id);
+  `);
 }
 
 // ─── Templates ───────────────────────────────────────────
@@ -332,19 +344,27 @@ async function submitInspectionResults(db, { inspectionId, results }) {
   return db.get('SELECT * FROM inspections WHERE id = ?', [inspectionId]);
 }
 
-async function listInspections(db, { storeId, templateId, status, limit = 50 } = {}) {
-  let sql = `SELECT i.*, it.name as template_name, s.name as store_name
-             FROM inspections i
+async function listInspections(db, { storeId, templateId, status, q, limit = 50, offset = 0, includeTotal = false } = {}) {
+  let where = `FROM inspections i
              LEFT JOIN inspection_templates it ON i.template_id = it.id
              LEFT JOIN stores s ON i.store_id = s.id
              WHERE 1=1`;
   const params = [];
-  if (storeId) { sql += ' AND i.store_id = ?'; params.push(storeId); }
-  if (templateId) { sql += ' AND i.template_id = ?'; params.push(templateId); }
-  if (status) { sql += ' AND i.status = ?'; params.push(status); }
-  sql += ' ORDER BY i.created_at DESC LIMIT ?';
-  params.push(limit);
-  return db.all(sql, params);
+  if (storeId) { where += ' AND i.store_id = ?'; params.push(storeId); }
+  if (templateId) { where += ' AND i.template_id = ?'; params.push(templateId); }
+  if (status) { where += ' AND i.status = ?'; params.push(status); }
+  if (q != null && String(q).trim()) {
+    where += ' AND (it.name LIKE ? OR s.name LIKE ?)';
+    const like = `%${String(q).trim()}%`;
+    params.push(like, like);
+  }
+  const sql = `SELECT i.*, it.name as template_name, s.name as store_name
+             ${where}
+             ORDER BY i.created_at DESC LIMIT ? OFFSET ?`;
+  const items = await db.all(sql, [...params, limit, offset]);
+  if (!includeTotal) return items;
+  const totalRow = await db.get(`SELECT COUNT(*) as c ${where}`, params);
+  return { items, total: Number(totalRow?.c || 0), limit, offset };
 }
 
 async function getInspection(db, id) {
@@ -396,18 +416,26 @@ async function updateIssue(db, id, updates) {
   return db.get('SELECT * FROM issues WHERE id = ?', [id]);
 }
 
-async function listIssues(db, { storeId, status, severity, limit = 50 } = {}) {
-  let sql = `SELECT issues.*, s.name as store_name
-             FROM issues
+async function listIssues(db, { storeId, status, severity, q, limit = 50, offset = 0, includeTotal = false } = {}) {
+  let where = `FROM issues
              LEFT JOIN stores s ON issues.store_id = s.id
              WHERE 1=1`;
   const params = [];
-  if (storeId) { sql += ' AND issues.store_id = ?'; params.push(storeId); }
-  if (status) { sql += ' AND issues.status = ?'; params.push(status); }
-  if (severity) { sql += ' AND issues.severity = ?'; params.push(severity); }
-  sql += ' ORDER BY issues.created_at DESC LIMIT ?';
-  params.push(limit);
-  return db.all(sql, params);
+  if (storeId) { where += ' AND issues.store_id = ?'; params.push(storeId); }
+  if (status) { where += ' AND issues.status = ?'; params.push(status); }
+  if (severity) { where += ' AND issues.severity = ?'; params.push(severity); }
+  if (q != null && String(q).trim()) {
+    where += ' AND (issues.title LIKE ? OR issues.description LIKE ? OR s.name LIKE ?)';
+    const like = `%${String(q).trim()}%`;
+    params.push(like, like, like);
+  }
+  const sql = `SELECT issues.*, s.name as store_name
+             ${where}
+             ORDER BY issues.created_at DESC LIMIT ? OFFSET ?`;
+  const items = await db.all(sql, [...params, limit, offset]);
+  if (!includeTotal) return items;
+  const totalRow = await db.get(`SELECT COUNT(*) as c ${where}`, params);
+  return { items, total: Number(totalRow?.c || 0), limit, offset };
 }
 
 

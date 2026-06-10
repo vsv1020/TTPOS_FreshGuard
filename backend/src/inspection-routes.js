@@ -24,6 +24,13 @@ function respondError(res, error) {
 function buildInspectionRoutes({ db, adminAuth, storeAuth }) {
   const router = express.Router();
 
+  // Resolve a store's brand id for audit brand scoping (null when unknown).
+  async function getStoreBrandId(storeId) {
+    if (storeId == null) return null;
+    const row = await db.get('SELECT brand_id AS brandId FROM stores WHERE id = ?', [storeId]);
+    return row ? row.brandId : null;
+  }
+
   // ─── Admin: Template CRUD ───────────────────────────────
 
   router.get('/admin/inspection/templates', adminAuth, async (req, res) => {
@@ -105,12 +112,24 @@ function buildInspectionRoutes({ db, adminAuth, storeAuth }) {
 
   router.get('/admin/inspection/list', adminAuth, async (req, res) => {
     try {
-      const inspections = await listInspections(db, {
+      const hasLimit = req.query.limit != null && req.query.limit !== '';
+      const filters = {
         storeId: req.query.storeId,
         templateId: req.query.templateId,
         status: req.query.status,
-        limit: parseInt(req.query.limit) || 50,
-      });
+        q: req.query.q,
+      };
+      if (hasLimit) {
+        // Pagination envelope contract: { items, total, limit, offset }.
+        const result = await listInspections(db, {
+          ...filters,
+          limit: parseInt(req.query.limit) || 50,
+          offset: parseInt(req.query.offset) || 0,
+          includeTotal: true,
+        });
+        return res.json(result);
+      }
+      const inspections = await listInspections(db, filters);
       res.json({ inspections });
     } catch (e) { respondError(res, e); }
   });
@@ -119,12 +138,24 @@ function buildInspectionRoutes({ db, adminAuth, storeAuth }) {
 
   router.get('/admin/inspection/issues', adminAuth, async (req, res) => {
     try {
-      const issues = await listIssues(db, {
+      const hasLimit = req.query.limit != null && req.query.limit !== '';
+      const filters = {
         storeId: req.query.storeId,
         status: req.query.status,
         severity: req.query.severity,
-        limit: parseInt(req.query.limit) || 50,
-      });
+        q: req.query.q,
+      };
+      if (hasLimit) {
+        // Pagination envelope contract: { items, total, limit, offset }.
+        const result = await listIssues(db, {
+          ...filters,
+          limit: parseInt(req.query.limit) || 50,
+          offset: parseInt(req.query.offset) || 0,
+          includeTotal: true,
+        });
+        return res.json(result);
+      }
+      const issues = await listIssues(db, filters);
       res.json({ issues });
     } catch (e) { respondError(res, e); }
   });
@@ -140,6 +171,16 @@ function buildInspectionRoutes({ db, adminAuth, storeAuth }) {
         assignedTo: req.body?.assignedTo,
         dueDate: req.body?.dueDate,
       });
+      recordAudit(db, {
+        actorType: 'admin',
+        actorId: req.admin?.email,
+        action: 'issue.create',
+        targetType: 'issue',
+        targetId: issue.id,
+        detail: issue.title,
+        ip: req.ip || null,
+        brandId: await getStoreBrandId(issue.store_id),
+      }).catch(() => {});
       res.status(201).json({ issue });
     } catch (e) { respondError(res, e); }
   });
@@ -147,6 +188,16 @@ function buildInspectionRoutes({ db, adminAuth, storeAuth }) {
   router.patch('/admin/inspection/issues/:id', adminAuth, async (req, res) => {
     try {
       const issue = await updateIssue(db, req.params.id, req.body);
+      recordAudit(db, {
+        actorType: 'admin',
+        actorId: req.admin?.email,
+        action: 'issue.update',
+        targetType: 'issue',
+        targetId: issue.id,
+        detail: issue.title,
+        ip: req.ip || null,
+        brandId: await getStoreBrandId(issue.store_id),
+      }).catch(() => {});
       res.json({ issue });
     } catch (e) { respondError(res, e); }
   });
@@ -210,6 +261,7 @@ function buildInspectionRoutes({ db, adminAuth, storeAuth }) {
         targetId: req.params.id,
         detail: req.body?.staffId != null ? `staff=${req.body.staffId}` : null,
         ip: req.ip || null,
+        brandId: req.storeAuth.brandId,
       }).catch(() => {});
       res.json({ inspection });
     } catch (e) { respondError(res, e); }
@@ -258,6 +310,7 @@ function buildInspectionRoutes({ db, adminAuth, storeAuth }) {
         targetId: req.params.id,
         detail: req.body?.staffId != null ? `staff=${req.body.staffId}` : null,
         ip: req.ip || null,
+        brandId: req.storeAuth.brandId,
       }).catch(() => {});
       res.json(result);
     } catch (e) { respondError(res, e); }

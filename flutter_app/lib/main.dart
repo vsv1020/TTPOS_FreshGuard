@@ -1,17 +1,32 @@
+import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:hive_flutter/hive_flutter.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'network.dart';
 import 'notifications/reminder_notifications.dart';
 import 'paging.dart';
 import 'printer/usb_printer.dart';
+import 'printing/offline_print_queue.dart';
+import 'printing/print_queue.dart';
+import 'scanning/scan_handle.dart';
+import 'scanning/scan_page.dart';
+import 'storage/local_cache.dart';
+import 'storage/secure_session_storage.dart';
 
-const _sessionKey = 'freshguard_session';
 const _usbPrinterSettingsKey = 'freshguard_usb_printer_settings';
 
-void main() {
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  try {
+    await Hive.initFlutter();
+  } catch (_) {
+    // Local storage unavailable: the app still works online-only.
+  }
   runApp(const FreshGuardStoreApp());
 }
 
@@ -34,11 +49,14 @@ class _FreshGuardStoreAppState extends State<FreshGuardStoreApp> {
   }
 
   Future<void> _loadSession() async {
-    final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getString(_sessionKey);
+    final raw = await SecureSessionStorage.instance.read();
     if (raw != null && raw.isNotEmpty) {
-      final data = jsonDecode(raw) as Map<String, dynamic>;
-      _session = AppSession.fromJson(data);
+      try {
+        final data = jsonDecode(raw) as Map<String, dynamic>;
+        _session = AppSession.fromJson(data);
+      } catch (_) {
+        // Corrupt stored session: fall back to the bind screen.
+      }
     }
 
     if (!mounted) {
@@ -51,8 +69,7 @@ class _FreshGuardStoreAppState extends State<FreshGuardStoreApp> {
   }
 
   Future<void> _onBound(AppSession session) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_sessionKey, jsonEncode(session.toJson()));
+    await SecureSessionStorage.instance.write(jsonEncode(session.toJson()));
     if (!mounted) {
       return;
     }
@@ -62,8 +79,7 @@ class _FreshGuardStoreAppState extends State<FreshGuardStoreApp> {
   }
 
   Future<void> _logout() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove(_sessionKey);
+    await SecureSessionStorage.instance.clear();
     if (!mounted) {
       return;
     }
@@ -105,15 +121,68 @@ class _BindScreenState extends State<BindScreen> {
 
   bool _submitting = false;
   String? _error;
+  String? _urlWarning;
+
+  @override
+  void initState() {
+    super.initState();
+    _urlWarning = _warningFor(_baseUrlController.text);
+  }
+
+  String? _warningFor(String url) {
+    switch (checkBaseUrl(url)) {
+      case BaseUrlVerdict.insecureLan:
+        return 'Plain HTTP — acceptable for LAN/localhost, but the token travels unencrypted.';
+      case BaseUrlVerdict.insecurePublic:
+        return 'Insecure: plain HTTP to a public host. Use HTTPS.';
+      case BaseUrlVerdict.secure:
+      case BaseUrlVerdict.invalid:
+        return null;
+    }
+  }
 
   Future<void> _bind() async {
+    final baseUrl = _baseUrlController.text.trim();
+    final verdict = checkBaseUrl(baseUrl);
+    if (verdict == BaseUrlVerdict.invalid) {
+      setState(() {
+        _error = 'Enter a valid http(s) backend URL.';
+      });
+      return;
+    }
+    if (verdict == BaseUrlVerdict.insecurePublic) {
+      final proceed = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Insecure connection'),
+          content: const Text(
+            'This backend URL uses plain HTTP on a public host, so the store '
+            'token would travel unencrypted. Continue anyway?',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(ctx).pop(true),
+              child: const Text('Continue'),
+            ),
+          ],
+        ),
+      );
+      if (proceed != true || !mounted) {
+        return;
+      }
+    }
+
     setState(() {
       _submitting = true;
       _error = null;
     });
 
     try {
-      final api = ApiClient(baseUrl: _baseUrlController.text.trim());
+      final api = ApiClient(baseUrl: baseUrl);
       final session = await api.bindStore(
         code: _codeController.text.trim(),
         deviceId: _deviceController.text.trim(),
@@ -130,6 +199,16 @@ class _BindScreenState extends State<BindScreen> {
         });
       }
     }
+  }
+
+  Future<void> _scanBindingCode() async {
+    final code = await BarcodeScanPage.scan(context, title: 'Scan binding code');
+    if (code == null || !mounted) {
+      return;
+    }
+    setState(() {
+      _codeController.text = code;
+    });
   }
 
   @override
@@ -160,12 +239,29 @@ class _BindScreenState extends State<BindScreen> {
                   const SizedBox(height: 16),
                   TextField(
                     controller: _baseUrlController,
+                    onChanged: (value) => setState(() {
+                      _urlWarning = _warningFor(value);
+                    }),
                     decoration: const InputDecoration(labelText: 'Backend URL'),
                   ),
+                  if (_urlWarning != null) ...[
+                    const SizedBox(height: 4),
+                    Text(
+                      _urlWarning!,
+                      style: const TextStyle(color: Colors.orange, fontSize: 12),
+                    ),
+                  ],
                   const SizedBox(height: 12),
                   TextField(
                     controller: _codeController,
-                    decoration: const InputDecoration(labelText: 'Binding code'),
+                    decoration: InputDecoration(
+                      labelText: 'Binding code',
+                      suffixIcon: IconButton(
+                        tooltip: 'Scan binding code',
+                        icon: const Icon(Icons.qr_code_scanner),
+                        onPressed: _submitting ? null : _scanBindingCode,
+                      ),
+                    ),
                   ),
                   const SizedBox(height: 12),
                   TextField(
@@ -214,6 +310,7 @@ class DashboardScreen extends StatefulWidget {
 class _DashboardScreenState extends State<DashboardScreen> {
   late final ApiClient _api;
   final UsbPrinterService _usbPrinterService = const UsbPrinterService();
+  final PrintQueue _printQueue = PrintQueue();
 
   final _quantityController = TextEditingController(text: '1');
 
@@ -236,6 +333,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
   bool _busy = false;
   String? _message;
 
+  // Offline support (null when local storage could not be opened).
+  LocalCache? _cache;
+  OfflinePrintQueue? _offlineQueue;
+  DateTime? _offlineDataAt;
+  Timer? _offlineFlushTimer;
+
   // Staff attribution (session-scoped, not persisted).
   StaffItem? _currentStaff;
 
@@ -247,9 +350,28 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   Future<void> _initializeDashboard() async {
+    await _openLocalStores();
     await _loadPrinterSettings();
     await _refreshUsbDevices(clearMessage: false);
     await _loadAll();
+  }
+
+  Future<void> _openLocalStores() async {
+    try {
+      _cache = await LocalCache.open();
+      _api.cache = _cache;
+      _offlineQueue = await OfflinePrintQueue.open();
+      _offlineFlushTimer = Timer.periodic(
+        const Duration(seconds: 30),
+        (_) => _flushOfflineQueue(),
+      );
+      if (mounted) {
+        // Surface any offline print requests persisted from a previous run.
+        setState(() {});
+      }
+    } catch (_) {
+      // Hive not initialized (e.g. unit tests): offline features stay off.
+    }
   }
 
   /// Shows a staff-picker + PIN dialog.
@@ -263,6 +385,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
     try {
       staffList = await _api.fetchStaff();
     } catch (error) {
+      if (isNetworkError(error)) {
+        // Offline: the staff list and PIN verification both need the server.
+        // Proceed without attribution so the action can still be queued.
+        return (skipped: true, staff: null);
+      }
       if (!mounted) return (skipped: false, staff: null);
       setState(() {
         _message = 'Failed to load staff: ${error.toString().replaceFirst('Exception: ', '')}';
@@ -311,10 +438,16 @@ class _DashboardScreenState extends State<DashboardScreen> {
         _remindersHasMore = reminders.hasMoreAfter(0);
         _selectedProductId =
             _selectedProductId ?? (products.items.isNotEmpty ? products.items.first.id : null);
+        _offlineDataAt = null;
       });
       _syncReminderNotifications(reminders.items);
+      // Back online: replay any print requests captured while offline.
+      _flushOfflineQueue();
     } catch (error) {
       if (!mounted) {
+        return;
+      }
+      if (isNetworkError(error) && _showCachedData()) {
         return;
       }
       setState(() {
@@ -326,6 +459,82 @@ class _DashboardScreenState extends State<DashboardScreen> {
           _busy = false;
         });
       }
+    }
+  }
+
+  /// Shows the last cached products/reminders when the network is down.
+  /// Returns true when any cached data was displayed.
+  bool _showCachedData() {
+    final productsEntry = _cache?.getJson('products');
+    final remindersEntry = _cache?.getJson('reminders_$_reminderStatus');
+    if (productsEntry == null && remindersEntry == null) {
+      return false;
+    }
+    try {
+      final products = productsEntry == null
+          ? null
+          : PagedResult.parse(productsEntry.data, 'products', ProductItem.fromJson);
+      final reminders = remindersEntry == null
+          ? null
+          : PagedResult.parse(remindersEntry.data, 'reminders', ReminderItem.fromJson);
+      setState(() {
+        if (products != null) {
+          _products = products.items;
+          _productsHasMore = false;
+          _selectedProductId ??=
+              products.items.isNotEmpty ? products.items.first.id : null;
+        }
+        if (reminders != null) {
+          _reminders = reminders.items;
+          _remindersHasMore = false;
+        }
+        _offlineDataAt = remindersEntry?.savedAt ?? productsEntry?.savedAt;
+        _message = null;
+      });
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Replays offline print requests in order: regenerates the batch on the
+  /// server, then prints the returned label (quantity copies) when a USB
+  /// printer is selected.
+  Future<void> _flushOfflineQueue() async {
+    final queue = _offlineQueue;
+    if (queue == null || queue.items.isEmpty || queue.isFlushing) {
+      return;
+    }
+    var submitted = 0;
+    await queue.flush(
+      isNetworkError: isNetworkError,
+      submit: (request) async {
+        final result = await _api.printLabels(
+          productId: request.productId,
+          quantity: request.quantity,
+          staffId: request.staffId,
+        );
+        submitted += 1;
+        if (!mounted) {
+          return;
+        }
+        if (_selectedUsbDevice != null && result.labelData != null) {
+          final bytes = LabelCommandBuilder.buildLabel(
+            profile: _printerProfile,
+            data: result.labelData!,
+          );
+          _enqueuePrint(
+            description:
+                'Offline batch #${result.batchId} (${request.productName} ×${request.quantity})',
+            pages: List<Uint8List>.filled(request.quantity, bytes),
+          );
+        }
+      },
+    );
+    if (submitted > 0 && mounted) {
+      setState(() {
+        _message = '$submitted offline print request(s) uploaded.';
+      });
     }
   }
 
@@ -463,9 +672,32 @@ class _DashboardScreenState extends State<DashboardScreen> {
       if (!mounted) {
         return;
       }
-      setState(() {
-        _message = error.toString().replaceFirst('Exception: ', '');
-      });
+      final queue = _offlineQueue;
+      if (isNetworkError(error) && queue != null) {
+        // No network: keep the request locally and replay it automatically
+        // once the backend is reachable again.
+        final product =
+            _products.where((p) => p.id == _selectedProductId).toList();
+        await queue.add(
+          productId: _selectedProductId!,
+          productName: product.isNotEmpty
+              ? product.first.name
+              : 'Product #$_selectedProductId',
+          quantity: quantity,
+          staffId: _currentStaff?.id,
+        );
+        if (!mounted) {
+          return;
+        }
+        setState(() {
+          _message =
+              'Network unavailable — print request queued for automatic upload when back online.';
+        });
+      } else {
+        setState(() {
+          _message = error.toString().replaceFirst('Exception: ', '');
+        });
+      }
     } finally {
       if (mounted) {
         setState(() {
@@ -646,46 +878,161 @@ class _DashboardScreenState extends State<DashboardScreen> {
       return;
     }
 
+    final bytes = _lastBackendLabel != null
+        ? LabelCommandBuilder.buildLabel(
+            profile: _printerProfile,
+            data: _lastBackendLabel!,
+          )
+        : LabelCommandBuilder.buildSample(
+            profile: _printerProfile,
+            labelText: _lastBackendLabelText,
+          );
+
+    final queued = _enqueuePrint(
+      description: 'Test print (${_printerProfile.label})',
+      pages: [bytes],
+    );
+    if (!queued) {
+      return;
+    }
+
+    await _savePrinterSettings(showStatus: false);
+
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _message =
+          'Test print queued using ${_printerProfile.label} for ${_selectedUsbDevice!.subtitle}.';
+    });
+  }
+
+  /// Queues label bytes for the currently selected USB device. The device is
+  /// captured at enqueue time so later selection changes do not affect
+  /// already-queued jobs.
+  bool _enqueuePrint({required String description, required List<Uint8List> pages}) {
+    final device = _selectedUsbDevice;
+    if (device == null) {
+      setState(() {
+        _message = 'Select a USB device before printing.';
+      });
+      return false;
+    }
+
+    _printQueue.enqueue(
+      description: description,
+      pages: pages,
+      writer: (bytes) async {
+        final granted = await _usbPrinterService.requestPermission(deviceId: device.deviceId);
+        if (!granted) {
+          throw Exception('USB permission denied for selected printer.');
+        }
+        final written = await _usbPrinterService.write(deviceId: device.deviceId, bytes: bytes);
+        if (written <= 0) {
+          throw Exception('USB write failed (wrote $written bytes).');
+        }
+      },
+    );
+    return true;
+  }
+
+  /// Scan a label barcode and jump straight into handling its reminder.
+  Future<void> _scanToHandle() async {
+    final code = await BarcodeScanPage.scan(context, title: 'Scan label barcode');
+    if (code == null || !mounted) {
+      return;
+    }
+
+    setState(() {
+      _busy = true;
+      _message = null;
+    });
+
+    Map<String, dynamic> result;
+    try {
+      result = await _api.fetchBatchByBarcode(code);
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _busy = false;
+        _message = 'Scan lookup failed: ${error.toString().replaceFirst('Exception: ', '')}';
+      });
+      return;
+    }
+
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _busy = false;
+    });
+
+    final reminderJson = result['reminder'];
+    if (reminderJson is! Map<String, dynamic>) {
+      setState(() {
+        _message = 'Batch found, but it has no pending reminder (already handled).';
+      });
+      return;
+    }
+
+    final reminder = ReminderItem.fromJson(reminderJson);
+    final reason = await showScanHandleSheet(
+      context,
+      productName: reminder.productName,
+      expiresAt: reminder.expiresAt,
+      batchId: reminder.batchId,
+    );
+    if (reason == null || !mounted) {
+      return;
+    }
+    await _handleReminder(reminder, reason);
+  }
+
+  /// Re-renders a historical batch's label on the backend and queues it for
+  /// printing on the existing USB channel.
+  Future<void> _reprintBatch(ReminderItem reminder) async {
+    final batchId = reminder.batchId;
+    if (batchId == null) {
+      setState(() {
+        _message = 'This reminder has no batch reference; cannot reprint.';
+      });
+      return;
+    }
+    if (_selectedUsbDevice == null) {
+      setState(() {
+        _message = 'Select a USB device before reprinting.';
+      });
+      return;
+    }
+
     setState(() {
       _busy = true;
       _message = null;
     });
 
     try {
-      final granted = await _usbPrinterService.requestPermission(deviceId: _selectedUsbDevice!.deviceId);
-      if (!granted) {
-        throw Exception('USB permission denied for selected printer.');
-      }
-
-      final bytes = _lastBackendLabel != null
-          ? LabelCommandBuilder.buildLabel(
-              profile: _printerProfile,
-              data: _lastBackendLabel!,
-            )
-          : LabelCommandBuilder.buildSample(
-              profile: _printerProfile,
-              labelText: _lastBackendLabelText,
-            );
-      final written = await _usbPrinterService.write(
-        deviceId: _selectedUsbDevice!.deviceId,
-        bytes: bytes,
-      );
-
-      await _savePrinterSettings(showStatus: false);
-
+      final label = await _api.fetchBatchLabel(batchId);
+      final bytes = LabelCommandBuilder.buildLabel(profile: _printerProfile, data: label);
       if (!mounted) {
         return;
       }
-      setState(() {
-        _message =
-            'Test print sent using ${_printerProfile.label} to ${_selectedUsbDevice!.subtitle}. Wrote $written bytes.';
-      });
+      final queued = _enqueuePrint(
+        description: 'Reprint batch #$batchId (${reminder.productName})',
+        pages: [bytes],
+      );
+      if (queued) {
+        setState(() {
+          _message = 'Reprint for batch #$batchId queued.';
+        });
+      }
     } catch (error) {
       if (!mounted) {
         return;
       }
       setState(() {
-        _message = error.toString().replaceFirst('Exception: ', '');
+        _message = 'Reprint failed: ${error.toString().replaceFirst('Exception: ', '')}';
       });
     } finally {
       if (mounted) {
@@ -698,8 +1045,16 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   @override
   void dispose() {
+    _offlineFlushTimer?.cancel();
     _quantityController.dispose();
+    _printQueue.dispose();
     super.dispose();
+  }
+
+  String _formatLocalTime(DateTime time) {
+    final t = time.toLocal();
+    String two(int v) => v.toString().padLeft(2, '0');
+    return '${t.year}-${two(t.month)}-${two(t.day)} ${two(t.hour)}:${two(t.minute)}';
   }
 
   @override
@@ -725,6 +1080,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   style: const TextStyle(fontSize: 13),
                 ),
               ),
+            IconButton(
+              tooltip: 'Scan label to handle',
+              onPressed: _busy ? null : _scanToHandle,
+              icon: const Icon(Icons.qr_code_scanner),
+            ),
             IconButton(onPressed: _busy ? null : _loadAll, icon: const Icon(Icons.refresh)),
             IconButton(onPressed: widget.onLogout, icon: const Icon(Icons.logout)),
           ],
@@ -732,6 +1092,24 @@ class _DashboardScreenState extends State<DashboardScreen> {
         body: Column(
           children: [
             if (_busy) const LinearProgressIndicator(),
+            if (_offlineDataAt != null)
+              Container(
+                width: double.infinity,
+                color: Colors.amber.shade100,
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                child: Row(
+                  children: [
+                    const Icon(Icons.cloud_off, size: 16),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        '离线数据，更新于 ${_formatLocalTime(_offlineDataAt!)}',
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
             if (_message != null)
               Padding(
                 padding: const EdgeInsets.all(12),
@@ -894,6 +1272,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       : 'Backend label text loaded and ready for test print.',
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
+                PrintQueueSection(queue: _printQueue),
+                if (_offlineQueue != null)
+                  OfflinePrintQueueSection(
+                    queue: _offlineQueue!,
+                    onUploadNow: _flushOfflineQueue,
+                  ),
               ],
             ),
           ),
@@ -1043,6 +1427,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                           _busy ? null : () => _handleReminder(reminder, reason),
                                       child: Text(reason[0].toUpperCase() + reason.substring(1)),
                                     ),
+                            OutlinedButton.icon(
+                              onPressed: _busy ? null : () => _reprintBatch(reminder),
+                              icon: const Icon(Icons.print, size: 18),
+                              label: const Text('Reprint'),
+                            ),
                           ],
                         ),
                       ],
@@ -1064,10 +1453,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
 }
 
 class ApiClient {
-  ApiClient({required this.baseUrl, this.token});
+  ApiClient({required this.baseUrl, this.token, this.cache});
 
   final String baseUrl;
   final String? token;
+
+  /// When set, first-page products/reminders responses are cached for
+  /// offline display. Attached after the Hive box opens.
+  LocalCache? cache;
 
   Future<dynamic> _request(
     String path, {
@@ -1087,12 +1480,22 @@ class ApiClient {
       response = await http.get(uri, headers: headers);
     }
 
-    final dynamic parsed =
-        response.body.isEmpty ? <String, dynamic>{} : jsonDecode(response.body);
+    // Tolerate non-JSON bodies (e.g. plain-text 429s from proxies/rate
+    // limiters) so errors surface as "HTTP <code>" instead of a decode crash.
+    dynamic parsed = <String, dynamic>{};
+    if (response.body.isNotEmpty) {
+      try {
+        parsed = jsonDecode(response.body);
+      } on FormatException {
+        parsed = <String, dynamic>{};
+      }
+    }
 
     if (response.statusCode >= 400) {
       final error = parsed is Map<String, dynamic>
-          ? (parsed['error']?.toString() ?? 'HTTP ${response.statusCode}')
+          ? (parsed['error']?.toString() ??
+              parsed['message']?.toString() ??
+              'HTTP ${response.statusCode}')
           : 'HTTP ${response.statusCode}';
       throw Exception(error);
     }
@@ -1133,6 +1536,9 @@ class ApiClient {
     };
     final query = params.isEmpty ? '' : '?${Uri(queryParameters: params).query}';
     final result = await _request('/api/store/products$query');
+    if (offset == 0 && (q == null || q.isEmpty)) {
+      await cache?.putJson('products', result);
+    }
     return PagedResult.parse(result, 'products', ProductItem.fromJson);
   }
 
@@ -1189,7 +1595,30 @@ class ApiClient {
     };
     final query = Uri(queryParameters: params).query;
     final result = await _request('/api/store/reminders?$query');
+    if (offset == 0) {
+      await cache?.putJson('reminders_$status', result);
+    }
     return PagedResult.parse(result, 'reminders', ReminderItem.fromJson);
+  }
+
+  /// Looks up a batch (and its pending reminder, if any) from a scanned
+  /// label barcode. Returns the raw `{batch, reminder}` payload; throws with
+  /// the server message on 404.
+  Future<Map<String, dynamic>> fetchBatchByBarcode(String code) async {
+    final query = Uri(queryParameters: {'code': code}).query;
+    final result = await _request('/api/store/batches/by-barcode?$query');
+    return result as Map<String, dynamic>;
+  }
+
+  /// Re-renders the label data for a historical batch. The response shape
+  /// matches the `label` object returned by `/api/store/print`.
+  Future<LabelData> fetchBatchLabel(int batchId) async {
+    final result = await _request('/api/store/batches/$batchId/label');
+    final map = result as Map<String, dynamic>;
+    final label = map['label'] is Map<String, dynamic>
+        ? map['label'] as Map<String, dynamic>
+        : map;
+    return LabelData.fromBackend(label);
   }
 
   Future<void> handleReminder({
@@ -1278,12 +1707,16 @@ class ReminderItem {
     required this.id,
     required this.productName,
     required this.expiresAt,
+    this.batchId,
     this.isPriority = false,
   });
 
   final int id;
   final String productName;
   final String expiresAt;
+
+  /// Source batch; used for label reprint.
+  final int? batchId;
 
   /// FIFO hint from the server: earliest unhandled batch of its product.
   final bool isPriority;
@@ -1293,6 +1726,7 @@ class ReminderItem {
       id: (json['id'] as num).toInt(),
       productName: json['productName'] as String,
       expiresAt: json['expiresAt'] as String,
+      batchId: (json['batchId'] as num?)?.toInt(),
       isPriority: json['is_priority'] == true || json['isPriority'] == true,
     );
   }

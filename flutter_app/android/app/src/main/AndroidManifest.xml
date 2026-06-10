@@ -1,17 +1,20 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.example.freshguard_store_flutter">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-feature android:name="android.hardware.usb.host" android:required="false" />
     <!-- Barcode scanning (mobile_scanner) -->
     <uses-feature android:name="android.hardware.camera" android:required="false" />
 
+    <uses-permission android:name="android.permission.INTERNET" />
     <!-- Local expiry notifications (flutter_local_notifications) -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <!-- Barcode scanning (mobile_scanner) -->
     <uses-permission android:name="android.permission.CAMERA" />
 
+    <!-- LAN/dev deployments use plain http; the app itself warns on http base URLs -->
     <application
         android:label="@string/app_name"
         android:name="${applicationName}"
+        android:usesCleartextTraffic="true"
         android:icon="@mipmap/ic_launcher">
         <activity
             android:name=".MainActivity"

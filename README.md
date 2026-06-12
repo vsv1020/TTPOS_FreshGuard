@@ -4,8 +4,20 @@ This repo now includes:
 
 - `backend/`: Express + SQLite backend with multi-tenant business model (`brand -> store`), admin JWT auth, store binding-code activation, label printing batches, reminders, handling logs, and reporting.
 - `backend/admin-web/`: Admin web with pages for binding management, product + label language + printer configuration, and expired handling report.
-- `flutter_app/`: Flutter store app scaffold (bind by code, list products, print labels, view reminders, USB printer discovery/selection, TSPL/CPCL test print).
-- `android/`: Original native Android scaffold retained for reference.
+- `frontend/`: Vue 3 + Vant inspection SPA; `npm run build` outputs to `backend/public/`, served by the backend at `/app`.
+- `flutter_app/`: Flutter store app (bind by code, list products, print labels, view reminders, USB printer discovery/selection, TSPL/CPCL test print).
+- `legacy/android/`: Original native Android scaffold, archived for reference.
+
+## Backend Architecture (`backend/src/`)
+
+- `server.js` — entry point; loads env, opens the DB, starts the HTTP server and reminder scan cron.
+- `app.js` — `buildApp({ db, jwtSecret })`: middleware assembly (CORS, rate limiters) and router mounting only.
+- `routes/` — one router module per domain (`auth`, `admin-accounts`, `admin-brands`, `admin-stores`, `admin-products`, `admin-reports`, `admin-dashboard`, `admin-label-templates`, `store`, `admin-pages`), each exporting `buildXxxRoutes({ deps })`.
+- `schema.js` — `createDb`/`closeDb` and table creation.
+- `repos/` — one data-access module per domain (admin-accounts, brands, stores, binding-codes, products, batches, reminders, staff, label-templates, dashboard, reports, audit).
+- `lib/` — pure helpers: `util`, `csv`, `labels` (label rendering), `promo` (promo rule evaluation), `http` (response/CSV helpers).
+- `db.js` — thin facade re-exporting the repo/lib surface; callers and tests import from here.
+- `auth.js`, `compliance.js`, `inspection-db.js` + `inspection-routes.js` — auth middleware, compliance report builders, and the self-contained inspection module.
 
 ## Backend Setup
 
@@ -184,14 +196,16 @@ USB printing support is implemented through Flutter method channel `freshguard/u
 
 ## Tests
 
-Backend tests:
-
-- `backend/test/auth.test.js`
-- `backend/test/business.test.js`
-
-Run:
+Backend (Jest, 15 suites under `backend/test/`):
 
 ```bash
 cd backend
 npm test
+```
+
+Flutter (pure-logic tests under `flutter_app/test/`):
+
+```bash
+cd flutter_app
+flutter test
 ```

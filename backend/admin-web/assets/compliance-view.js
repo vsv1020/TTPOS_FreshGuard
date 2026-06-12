@@ -92,7 +92,9 @@
   // Default date-input value per report type: daily → today, weekly → the
   // Monday of the current week, monthly → current YYYY-MM.
   function defaultDateFor(type, now) {
-    const d = now instanceof Date ? new Date(now.getTime()) : new Date();
+    // Duck-type instead of `instanceof Date`: callers may pass a Date from
+    // another realm (e.g. tests loading this file in a vm context).
+    const d = now && typeof now.getTime === 'function' ? new Date(now.getTime()) : new Date();
     if (type === 'monthly') {
       return isoDate(d).slice(0, 7);
     }

@@ -11,7 +11,11 @@ import '../models.dart';
 import '../network.dart';
 import '../notifications/reminder_notifications.dart';
 import '../paging.dart';
+import '../printer/network_transport.dart';
+import '../printer/printer_settings.dart';
+import '../printer/transport.dart';
 import '../printer/usb_printer.dart';
+import '../printer/usb_transport.dart';
 import '../printing/offline_print_queue.dart';
 import '../printing/print_queue.dart';
 import '../promo.dart';
@@ -21,7 +25,10 @@ import '../session.dart';
 import '../storage/local_cache.dart';
 import '../widgets/staff_pin_dialog.dart';
 
-const _usbPrinterSettingsKey = 'freshguard_usb_printer_settings';
+/// Current persistence key; [_legacyUsbPrinterSettingsKey] is read once for
+/// one-time migration of installs that saved USB-only settings.
+const _printerSettingsKey = 'freshguard_printer_settings';
+const _legacyUsbPrinterSettingsKey = 'freshguard_usb_printer_settings';
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({
@@ -39,24 +46,33 @@ class DashboardScreen extends StatefulWidget {
 
 class _DashboardScreenState extends State<DashboardScreen> {
   late final ApiClient _api;
-  final UsbPrinterService _usbPrinterService = const UsbPrinterService();
+
+  /// Registered printer transports. Each is filtered out of the picker when
+  /// not available on the running platform (USB/SPP are Android-only).
+  final List<PrinterTransport> _transports = [
+    UsbTransport(),
+    const NetworkTransport(),
+  ];
   final PrintQueue _printQueue = PrintQueue();
 
   final _quantityController = TextEditingController(text: '1');
+  final _netHostController = TextEditingController();
+  final _netPortController = TextEditingController(text: '$kDefaultPrinterPort');
 
   static const _pageSize = 20;
 
   List<ProductItem> _products = [];
   List<ReminderItem> _reminders = [];
-  List<UsbPrinterDevice> _usbDevices = [];
+  List<PrinterEndpoint> _endpoints = [];
   bool _productsHasMore = false;
   bool _remindersHasMore = false;
   bool _loadingMoreProducts = false;
   bool _loadingMoreReminders = false;
   int? _selectedProductId;
   PrinterProfile _printerProfile = PrinterProfile.tspl;
-  UsbPrinterDevice? _selectedUsbDevice;
-  UsbPrinterSettings _savedPrinterSettings = const UsbPrinterSettings(profile: PrinterProfile.tspl);
+  PrinterTransportType _transportType = PrinterTransportType.usb;
+  PrinterEndpoint? _selectedEndpoint;
+  PrinterSettings _savedPrinterSettings = const PrinterSettings(profile: PrinterProfile.tspl);
   String _lastBackendLabelText = '';
   LabelData? _lastBackendLabel;
   String _reminderStatus = 'expired';
@@ -76,14 +92,41 @@ class _DashboardScreenState extends State<DashboardScreen> {
   void initState() {
     super.initState();
     _api = ApiClient(baseUrl: widget.session.baseUrl, token: widget.session.token);
+    // Default to the first transport available on this platform (USB on
+    // Android, network on iOS) until saved settings override it.
+    final available = _availableTransportTypes;
+    if (available.isNotEmpty && !available.contains(_transportType)) {
+      _transportType = available.first;
+    }
     _initializeDashboard();
   }
 
   Future<void> _initializeDashboard() async {
     await _openLocalStores();
     await _loadPrinterSettings();
-    await _refreshUsbDevices(clearMessage: false);
+    if (_activeTransport.type.supportsDiscovery) {
+      await _discoverEndpoints(clearMessage: false);
+    }
     await _loadAll();
+  }
+
+  /// Transport types registered AND available on this platform.
+  List<PrinterTransportType> get _availableTransportTypes =>
+      _transports.where((t) => t.isAvailable).map((t) => t.type).toList();
+
+  PrinterTransport get _activeTransport =>
+      _transports.firstWhere((t) => t.type == _transportType);
+
+  /// The endpoint to print to for the active transport: network is built from
+  /// the host/port fields, other transports use the selected discovered device.
+  PrinterEndpoint? get _currentEndpoint {
+    if (_transportType == PrinterTransportType.network) {
+      final host = _netHostController.text.trim();
+      if (host.isEmpty) return null;
+      final port = int.tryParse(_netPortController.text.trim()) ?? kDefaultPrinterPort;
+      return NetworkTransport.endpointFor(host, port: port);
+    }
+    return _selectedEndpoint;
   }
 
   Future<void> _openLocalStores() async {
@@ -248,7 +291,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         if (!mounted) {
           return;
         }
-        if (_selectedUsbDevice != null && result.labelData != null) {
+        if (_currentEndpoint != null && result.labelData != null) {
           final bytes = LabelCommandBuilder.buildLabel(
             profile: _printerProfile,
             data: result.labelData!,
@@ -495,21 +538,38 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   Future<void> _loadPrinterSettings() async {
     final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getString(_usbPrinterSettingsKey);
+    // Prefer the current key; fall back to the legacy USB-only key so existing
+    // installs migrate their saved printer on first launch.
+    final raw = prefs.getString(_printerSettingsKey) ??
+        prefs.getString(_legacyUsbPrinterSettingsKey);
     if (raw == null || raw.isEmpty) {
       return;
     }
 
     try {
       final parsed = jsonDecode(raw) as Map<String, dynamic>;
-      final settings = UsbPrinterSettings.fromJson(parsed);
+      final settings = PrinterSettings.fromJson(parsed);
       if (!mounted) {
         return;
       }
+      // Only adopt the saved transport if it is available on this platform
+      // (e.g. a USB selection synced to an iOS device falls back gracefully).
+      final transport = _availableTransportTypes.contains(settings.transport)
+          ? settings.transport
+          : (_availableTransportTypes.isNotEmpty
+              ? _availableTransportTypes.first
+              : settings.transport);
       setState(() {
         _printerProfile = settings.profile;
         _savedPrinterSettings = settings;
-        _selectedUsbDevice = settings.device;
+        _transportType = transport;
+        _selectedEndpoint = settings.endpoint;
+        if (settings.endpoint?.transport == PrinterTransportType.network) {
+          _netHostController.text = settings.endpoint!.data['host']?.toString() ?? '';
+          _netPortController.text =
+              (settings.endpoint!.data['port'] as num?)?.toInt().toString() ??
+                  '$kDefaultPrinterPort';
+        }
       });
     } catch (_) {
       // Ignore malformed local setting and keep defaults.
@@ -517,13 +577,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   Future<void> _savePrinterSettings({bool showStatus = true}) async {
-    final settings = UsbPrinterSettings(
+    final settings = PrinterSettings(
       profile: _printerProfile,
-      device: _selectedUsbDevice,
+      transport: _transportType,
+      endpoint: _currentEndpoint,
     );
 
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_usbPrinterSettingsKey, jsonEncode(settings.toJson()));
+    await prefs.setString(_printerSettingsKey, jsonEncode(settings.toJson()));
 
     if (!mounted) {
       return;
@@ -536,36 +597,26 @@ class _DashboardScreenState extends State<DashboardScreen> {
     });
   }
 
-  UsbPrinterDevice? _matchSavedDevice(List<UsbPrinterDevice> devices) {
-    if (_selectedUsbDevice != null) {
-      for (final device in devices) {
-        if (device.persistentKey == _selectedUsbDevice!.persistentKey) {
-          return device;
-        }
+  /// Re-selects the saved endpoint from a fresh discovery scan by matching its
+  /// stable id, so a reconnect keeps the user's prior choice.
+  PrinterEndpoint? _matchSavedEndpoint(List<PrinterEndpoint> endpoints) {
+    final target = _selectedEndpoint ?? _savedPrinterSettings.endpoint;
+    if (target == null) {
+      return _selectedEndpoint;
+    }
+    for (final endpoint in endpoints) {
+      if (endpoint.id == target.id) {
+        return endpoint;
       }
     }
-
-    final saved = _savedPrinterSettings.device;
-    if (saved == null) {
-      return _selectedUsbDevice;
-    }
-
-    for (final device in devices) {
-      final sameVendorProduct = device.vendorId == saved.vendorId && device.productId == saved.productId;
-      if (sameVendorProduct && device.deviceId == saved.deviceId) {
-        return device;
-      }
-    }
-
-    for (final device in devices) {
-      if (device.vendorId == saved.vendorId && device.productId == saved.productId) {
-        return device;
-      }
-    }
-    return _selectedUsbDevice;
+    return _selectedEndpoint;
   }
 
-  Future<void> _refreshUsbDevices({bool clearMessage = true}) async {
+  Future<void> _discoverEndpoints({bool clearMessage = true}) async {
+    final transport = _activeTransport;
+    if (!transport.type.supportsDiscovery) {
+      return;
+    }
     setState(() {
       _busy = true;
       if (clearMessage) {
@@ -574,13 +625,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
     });
 
     try {
-      final devices = await _usbPrinterService.listDevices();
+      final endpoints = await transport.discover();
       if (!mounted) {
         return;
       }
       setState(() {
-        _usbDevices = devices;
-        _selectedUsbDevice = _matchSavedDevice(devices);
+        _endpoints = endpoints;
+        _selectedEndpoint = _matchSavedEndpoint(endpoints);
       });
     } catch (error) {
       if (!mounted) {
@@ -599,9 +650,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   Future<void> _testPrint() async {
-    if (_selectedUsbDevice == null) {
+    final endpoint = _currentEndpoint;
+    if (endpoint == null) {
       setState(() {
-        _message = 'Select a USB device before test printing.';
+        _message = 'Select or configure a printer before test printing.';
       });
       return;
     }
@@ -638,18 +690,18 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
     setState(() {
       _message =
-          'Test print queued using ${_printerProfile.label} for ${_selectedUsbDevice!.subtitle}.';
+          'Test print queued using ${_printerProfile.label} over ${_transportType.label} for ${endpoint.name}.';
     });
   }
 
-  /// Queues label bytes for the currently selected USB device. The device is
-  /// captured at enqueue time so later selection changes do not affect
-  /// already-queued jobs.
+  /// Queues label bytes for the active transport + endpoint. Both are captured
+  /// at enqueue time so later selection changes do not affect queued jobs.
   bool _enqueuePrint({required String description, required List<Uint8List> pages}) {
-    final device = _selectedUsbDevice;
-    if (device == null) {
+    final transport = _activeTransport;
+    final endpoint = _currentEndpoint;
+    if (endpoint == null) {
       setState(() {
-        _message = 'Select a USB device before printing.';
+        _message = 'Select or configure a printer before printing.';
       });
       return false;
     }
@@ -658,17 +710,64 @@ class _DashboardScreenState extends State<DashboardScreen> {
       description: description,
       pages: pages,
       writer: (bytes) async {
-        final granted = await _usbPrinterService.requestPermission(deviceId: device.deviceId);
-        if (!granted) {
-          throw Exception('USB permission denied for selected printer.');
-        }
-        final written = await _usbPrinterService.write(deviceId: device.deviceId, bytes: bytes);
-        if (written <= 0) {
-          throw Exception('USB write failed (wrote $written bytes).');
-        }
+        await transport.send(endpoint, [bytes]);
       },
     );
     return true;
+  }
+
+  /// Transport-specific configuration UI: manual host/port for network, or a
+  /// discovered-device radio list for the scanning transports (USB/BLE/SPP).
+  List<Widget> _buildTransportConfig() {
+    if (_transportType == PrinterTransportType.network) {
+      return [
+        TextField(
+          controller: _netHostController,
+          keyboardType: TextInputType.url,
+          decoration: const InputDecoration(
+            labelText: 'Printer IP / host',
+            hintText: '192.168.1.50',
+          ),
+          onChanged: (_) => setState(() {}),
+        ),
+        const SizedBox(height: 8),
+        TextField(
+          controller: _netPortController,
+          keyboardType: TextInputType.number,
+          decoration: const InputDecoration(labelText: 'Port'),
+          onChanged: (_) => setState(() {}),
+        ),
+      ];
+    }
+
+    if (_endpoints.isEmpty) {
+      return [
+        Text(
+          'No ${_transportType.label} devices found. '
+          'Make sure the printer is on and tap the search icon.',
+        ),
+      ];
+    }
+
+    return _endpoints
+        .map(
+          (endpoint) => RadioListTile<String>(
+            contentPadding: EdgeInsets.zero,
+            dense: true,
+            title: Text(endpoint.name),
+            subtitle: Text(endpoint.detail),
+            value: endpoint.id,
+            groupValue: _selectedEndpoint?.id,
+            onChanged: _busy
+                ? null
+                : (_) {
+                    setState(() {
+                      _selectedEndpoint = endpoint;
+                    });
+                  },
+          ),
+        )
+        .toList();
   }
 
   /// Scan a label barcode and jump straight into handling its reminder.
@@ -735,9 +834,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
       });
       return;
     }
-    if (_selectedUsbDevice == null) {
+    if (_currentEndpoint == null) {
       setState(() {
-        _message = 'Select a USB device before reprinting.';
+        _message = 'Select or configure a printer before reprinting.';
       });
       return;
     }
@@ -782,6 +881,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
   void dispose() {
     _offlineFlushTimer?.cancel();
     _quantityController.dispose();
+    _netHostController.dispose();
+    _netPortController.dispose();
     _printQueue.dispose();
     super.dispose();
   }
@@ -923,22 +1024,23 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 Row(
                   children: [
                     Expanded(
-                      child: Text('USB Printer', style: Theme.of(context).textTheme.titleMedium),
+                      child: Text('Printer', style: Theme.of(context).textTheme.titleMedium),
                     ),
-                    IconButton(
-                      tooltip: 'Discover USB devices',
-                      onPressed: _busy ? null : () => _refreshUsbDevices(),
-                      icon: const Icon(Icons.usb),
-                    ),
+                    if (_transportType.supportsDiscovery)
+                      IconButton(
+                        tooltip: 'Discover ${_transportType.label} devices',
+                        onPressed: _busy ? null : () => _discoverEndpoints(),
+                        icon: const Icon(Icons.search),
+                      ),
                   ],
                 ),
                 Text(
-                  _selectedUsbDevice == null
+                  _currentEndpoint == null
                       ? 'Selected: none'
-                      : 'Selected: ${_selectedUsbDevice!.title} (${_selectedUsbDevice!.subtitle})',
+                      : 'Selected: ${_currentEndpoint!.name} (${_currentEndpoint!.detail})',
                 ),
                 Text(
-                  'Saved profile: ${_savedPrinterSettings.profile.label}',
+                  'Saved: ${_savedPrinterSettings.transport.label} · ${_savedPrinterSettings.profile.label}',
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
                 const SizedBox(height: 12),
@@ -965,26 +1067,37 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         },
                 ),
                 const SizedBox(height: 12),
-                if (_usbDevices.isEmpty)
-                  const Text('No USB devices detected. Connect a printer and tap USB refresh.')
-                else
-                  ..._usbDevices.map(
-                    (device) => RadioListTile<String>(
-                      contentPadding: EdgeInsets.zero,
-                      dense: true,
-                      title: Text(device.title),
-                      subtitle: Text('${device.subtitle} | Device ID ${device.deviceId}'),
-                      value: device.persistentKey,
-                      groupValue: _selectedUsbDevice?.persistentKey,
-                      onChanged: _busy
-                          ? null
-                          : (_) {
-                              setState(() {
-                                _selectedUsbDevice = device;
-                              });
-                            },
-                    ),
-                  ),
+                DropdownButtonFormField<PrinterTransportType>(
+                  value: _availableTransportTypes.contains(_transportType)
+                      ? _transportType
+                      : null,
+                  decoration: const InputDecoration(labelText: 'Connection'),
+                  items: _availableTransportTypes
+                      .map(
+                        (t) => DropdownMenuItem<PrinterTransportType>(
+                          value: t,
+                          child: Text(t.label),
+                        ),
+                      )
+                      .toList(),
+                  onChanged: _busy
+                      ? null
+                      : (transport) {
+                          if (transport == null) {
+                            return;
+                          }
+                          setState(() {
+                            _transportType = transport;
+                            _endpoints = [];
+                            _selectedEndpoint = null;
+                          });
+                          if (transport.supportsDiscovery) {
+                            _discoverEndpoints();
+                          }
+                        },
+                ),
+                const SizedBox(height: 12),
+                ..._buildTransportConfig(),
                 const SizedBox(height: 8),
                 Wrap(
                   spacing: 8,

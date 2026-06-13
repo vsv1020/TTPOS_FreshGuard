@@ -11,8 +11,10 @@ import '../models.dart';
 import '../network.dart';
 import '../notifications/reminder_notifications.dart';
 import '../paging.dart';
+import '../printer/ble_transport.dart';
 import '../printer/network_transport.dart';
 import '../printer/printer_settings.dart';
+import '../printer/spp_transport.dart';
 import '../printer/transport.dart';
 import '../printer/usb_printer.dart';
 import '../printer/usb_transport.dart';
@@ -51,6 +53,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
   /// not available on the running platform (USB/SPP are Android-only).
   final List<PrinterTransport> _transports = [
     UsbTransport(),
+    BleTransport(),
+    SppTransport(),
     const NetworkTransport(),
   ];
   final PrintQueue _printQueue = PrintQueue();

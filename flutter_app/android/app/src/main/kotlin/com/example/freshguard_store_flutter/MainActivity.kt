@@ -1,6 +1,9 @@
 package com.example.freshguard_store_flutter
 
 import android.app.PendingIntent
+import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothManager
+import android.bluetooth.BluetoothSocket
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -16,13 +19,19 @@ import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
+import java.util.UUID
+import kotlin.concurrent.thread
 
 class MainActivity : FlutterActivity() {
     private val channelName = "freshguard/usb_printer"
+    private val sppChannelName = "freshguard/bluetooth_spp"
     private val usbPermissionAction: String by lazy { "$packageName.USB_PERMISSION" }
 
     private var pendingPermissionResult: MethodChannel.Result? = null
     private var permissionReceiverRegistered = false
+
+    // Well-known Serial Port Profile UUID for RFCOMM connections.
+    private val sppUuid: UUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
 
     private data class UsbEndpointTarget(
         val usbInterface: UsbInterface,
@@ -53,6 +62,88 @@ class MainActivity : FlutterActivity() {
                 "requestPermission" -> handleRequestPermission(call, result)
                 "write" -> handleWrite(call, result)
                 else -> result.notImplemented()
+            }
+        }
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, sppChannelName).setMethodCallHandler {
+            call, result ->
+            when (call.method) {
+                "listBondedDevices" -> handleListBondedDevices(result)
+                "write" -> handleSppWrite(call, result)
+                else -> result.notImplemented()
+            }
+        }
+    }
+
+    private fun bluetoothAdapter(): BluetoothAdapter? {
+        val manager = getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
+        return manager?.adapter
+    }
+
+    private fun handleListBondedDevices(result: MethodChannel.Result) {
+        val adapter = bluetoothAdapter()
+        if (adapter == null || !adapter.isEnabled) {
+            result.error("bt_unavailable", "Bluetooth is off or unavailable.", null)
+            return
+        }
+        try {
+            val devices =
+                adapter.bondedDevices.map { device ->
+                    mapOf(
+                        "name" to (device.name ?: ""),
+                        "address" to device.address
+                    )
+                }
+            result.success(devices)
+        } catch (e: SecurityException) {
+            result.error("bt_permission", "BLUETOOTH_CONNECT permission denied.", e.message)
+        }
+    }
+
+    /**
+     * Opens an RFCOMM socket to the well-known SPP UUID, writes [bytes], and
+     * closes it. Runs off the platform thread because connect()/write() block.
+     */
+    private fun handleSppWrite(call: MethodCall, result: MethodChannel.Result) {
+        val address = call.argument<String>("address")
+        val bytes = call.argument<ByteArray>("bytes")
+        if (address.isNullOrEmpty() || bytes == null) {
+            result.error("invalid_args", "address and bytes are required.", null)
+            return
+        }
+        if (bytes.isEmpty()) {
+            result.error("invalid_args", "bytes must be non-empty.", null)
+            return
+        }
+
+        val adapter = bluetoothAdapter()
+        if (adapter == null || !adapter.isEnabled) {
+            result.error("bt_unavailable", "Bluetooth is off or unavailable.", null)
+            return
+        }
+
+        thread(start = true) {
+            var socket: BluetoothSocket? = null
+            try {
+                val device = adapter.getRemoteDevice(address)
+                socket = device.createRfcommSocketToServiceRecord(sppUuid)
+                adapter.cancelDiscovery()
+                socket.connect()
+                socket.outputStream.write(bytes)
+                socket.outputStream.flush()
+                runOnUiThread { result.success(bytes.size) }
+            } catch (e: SecurityException) {
+                runOnUiThread {
+                    result.error("bt_permission", "BLUETOOTH_CONNECT permission denied.", e.message)
+                }
+            } catch (e: Exception) {
+                runOnUiThread {
+                    result.error("spp_write_failed", e.message ?: "RFCOMM write failed.", null)
+                }
+            } finally {
+                try {
+                    socket?.close()
+                } catch (_: Exception) {
+                }
             }
         }
     }

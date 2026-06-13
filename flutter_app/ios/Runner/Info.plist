@@ -4,6 +4,10 @@
 <dict>
 	<key>CADisableMinimumFrameDurationOnPhone</key>
 	<true/>
+	<!-- App uses only standard encryption (HTTPS / OS crypto); declaring this
+	     skips the per-build export-compliance question on TestFlight. -->
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 	<!-- BLE label printing (flutter_blue_plus) -->
 	<key>NSBluetoothAlwaysUsageDescription</key>
 	<string>FreshGuard connects to Bluetooth label printers to print expiry labels.</string>

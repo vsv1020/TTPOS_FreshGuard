@@ -26,55 +26,55 @@
 
     <main class="dashboard-grid">
       <section class="panel" data-write>
-        <h2>Create Product</h2>
+        <h2 data-i18n="products.createProduct">Create Product</h2>
         <form id="product-form" class="stack">
           <select id="product-brand" required></select>
-          <input id="product-name" placeholder="Product name" required />
-          <input id="product-sku" placeholder="SKU" />
-          <input id="product-shelf-life" type="number" placeholder="Shelf life days" required />
+          <input id="product-name" data-i18n-ph="products.phProductName" placeholder="Product name" required />
+          <input id="product-sku" data-i18n-ph="products.phSku" placeholder="SKU" />
+          <input id="product-shelf-life" type="number" data-i18n-ph="products.phShelfLifeDays" placeholder="Shelf life days" required />
           <select id="product-label-language" required>
-            <option value="single">single</option>
-            <option value="bilingual">bilingual</option>
+            <option value="single" data-i18n="products.optSingle">single</option>
+            <option value="bilingual" data-i18n="products.optBilingual">bilingual</option>
           </select>
           <select id="product-primary-language" required></select>
           <select id="product-secondary-language"></select>
-          <p class="hint">Bilingual labels require a secondary language.</p>
+          <p class="hint" data-i18n="products.hintBilingual">Bilingual labels require a secondary language.</p>
           <select id="product-color-code"></select>
-          <p class="hint">四色色标：红=畜肉禽类 / 蓝=水产 / 绿=果蔬 / 黄=熟食半成品（可不选）。</p>
-          <input id="product-allergens" placeholder="Allergens (optional)" />
-          <input id="product-storage-conditions" placeholder="Storage conditions (optional)" />
-          <input id="product-opened-shelf-life-hours" type="number" placeholder="Opened shelf life hours (optional)" />
-          <input id="product-cost-price" type="number" step="0.01" min="0" placeholder="Cost price (optional)" />
-          <button type="submit">Create Product</button>
+          <p class="hint" data-i18n="products.hintColorCode">四色色标：红=畜肉禽类 / 蓝=水产 / 绿=果蔬 / 黄=熟食半成品（可不选）。</p>
+          <input id="product-allergens" data-i18n-ph="products.phAllergens" placeholder="Allergens (optional)" />
+          <input id="product-storage-conditions" data-i18n-ph="products.phStorageConditions" placeholder="Storage conditions (optional)" />
+          <input id="product-opened-shelf-life-hours" type="number" data-i18n-ph="products.phOpenedShelfLifeHours" placeholder="Opened shelf life hours (optional)" />
+          <input id="product-cost-price" type="number" step="0.01" min="0" data-i18n-ph="products.phCostPrice" placeholder="Cost price (optional)" />
+          <button type="submit" data-i18n="products.createProduct">Create Product</button>
         </form>
       </section>
 
       <section class="panel" data-write>
-        <h2>Store Printer Settings</h2>
+        <h2 data-i18n="products.storePrinterSettings">Store Printer Settings</h2>
         <form id="printer-form" class="stack">
           <select id="printer-store" required></select>
-          <input id="printer-name" placeholder="Printer name" />
-          <input id="printer-model" placeholder="Printer model" />
-          <input id="printer-address" placeholder="Printer address (IP/BLE ID)" />
-          <input id="printer-port" type="number" placeholder="Printer port" />
-          <input id="printer-dpi" type="number" placeholder="Printer DPI" />
-          <input id="label-width-mm" type="number" placeholder="Label width (mm)" />
-          <button type="submit">Save Printer Settings</button>
+          <input id="printer-name" data-i18n-ph="products.phPrinterName" placeholder="Printer name" />
+          <input id="printer-model" data-i18n-ph="products.phPrinterModel" placeholder="Printer model" />
+          <input id="printer-address" data-i18n-ph="products.phPrinterAddress" placeholder="Printer address (IP/BLE ID)" />
+          <input id="printer-port" type="number" data-i18n-ph="products.phPrinterPort" placeholder="Printer port" />
+          <input id="printer-dpi" type="number" data-i18n-ph="products.phPrinterDpi" placeholder="Printer DPI" />
+          <input id="label-width-mm" type="number" data-i18n-ph="products.phLabelWidthMm" placeholder="Label width (mm)" />
+          <button type="submit" data-i18n="products.savePrinterSettings">Save Printer Settings</button>
         </form>
         <p id="printer-selected-hint" class="hint"></p>
       </section>
 
       <section class="panel wide">
-        <h2>Products</h2>
+        <h2 data-i18n="products.products">Products</h2>
         <div class="filter-row">
-          <button id="export-csv-btn" type="button" style="background:#0369a1;">Export CSV</button>
-          <button id="download-template-btn" type="button" style="background:#334155;">Download Template</button>
+          <button id="export-csv-btn" type="button" style="background:#0369a1;" data-i18n="products.exportCsv">Export CSV</button>
+          <button id="download-template-btn" type="button" style="background:#334155;" data-i18n="products.downloadTemplate">Download Template</button>
           <span data-write>
             <input id="import-csv-file" type="file" accept=".csv,text/csv" style="display:none;" />
-            <button id="import-csv-btn" type="button" style="background:#15803d;">Import CSV</button>
+            <button id="import-csv-btn" type="button" style="background:#15803d;" data-i18n="products.importCsv">Import CSV</button>
           </span>
         </div>
-        <p class="hint">
+        <p class="hint" data-i18n="products.hintCsvColorCode">
           CSV 支持 <code>colorCode</code> 列（四色色标）：<code>red</code>=畜肉禽类、<code>blue</code>=水产、
           <code>green</code>=果蔬、<code>yellow</code>=熟食半成品，留空为无。
         </p>
@@ -83,18 +83,18 @@
         <table>
           <thead>
             <tr>
-              <th>Brand</th>
-              <th>Name</th>
-              <th>SKU</th>
-              <th>Color</th>
-              <th>Shelf Life Days</th>
-              <th>Label Language</th>
-              <th>Primary</th>
-              <th>Secondary</th>
-              <th>Allergens</th>
-              <th>Storage Conditions</th>
-              <th>Opened Shelf Life (h)</th>
-              <th>Cost Price</th>
+              <th data-i18n="products.thBrand">Brand</th>
+              <th data-i18n="products.thName">Name</th>
+              <th data-i18n="products.thSku">SKU</th>
+              <th data-i18n="products.thColor">Color</th>
+              <th data-i18n="products.thShelfLifeDays">Shelf Life Days</th>
+              <th data-i18n="products.thLabelLanguage">Label Language</th>
+              <th data-i18n="products.thPrimary">Primary</th>
+              <th data-i18n="products.thSecondary">Secondary</th>
+              <th data-i18n="products.thAllergens">Allergens</th>
+              <th data-i18n="products.thStorageConditions">Storage Conditions</th>
+              <th data-i18n="products.thOpenedShelfLife">Opened Shelf Life (h)</th>
+              <th data-i18n="products.thCostPrice">Cost Price</th>
               <th></th>
             </tr>
           </thead>
@@ -106,28 +106,28 @@
     <!-- Edit Product Modal -->
     <div id="edit-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:100;align-items:center;justify-content:center;">
       <div class="card" style="width:min(480px,94vw);max-height:90vh;overflow-y:auto;">
-        <h2>Edit Product</h2>
+        <h2 data-i18n="products.editProduct">Edit Product</h2>
         <form id="edit-product-form" class="stack">
           <input type="hidden" id="edit-product-id" />
           <select id="edit-product-brand" required></select>
-          <input id="edit-product-name" placeholder="Product name" required />
-          <input id="edit-product-sku" placeholder="SKU" />
-          <input id="edit-product-shelf-life" type="number" placeholder="Shelf life days" required />
+          <input id="edit-product-name" data-i18n-ph="products.phProductName" placeholder="Product name" required />
+          <input id="edit-product-sku" data-i18n-ph="products.phSku" placeholder="SKU" />
+          <input id="edit-product-shelf-life" type="number" data-i18n-ph="products.phShelfLifeDays" placeholder="Shelf life days" required />
           <select id="edit-product-label-language" required>
-            <option value="single">single</option>
-            <option value="bilingual">bilingual</option>
+            <option value="single" data-i18n="products.optSingle">single</option>
+            <option value="bilingual" data-i18n="products.optBilingual">bilingual</option>
           </select>
           <select id="edit-product-primary-language" required></select>
           <select id="edit-product-secondary-language"></select>
-          <p class="hint">Bilingual labels require a secondary language.</p>
+          <p class="hint" data-i18n="products.hintBilingual">Bilingual labels require a secondary language.</p>
           <select id="edit-product-color-code"></select>
-          <input id="edit-product-allergens" placeholder="Allergens (optional)" />
-          <input id="edit-product-storage-conditions" placeholder="Storage conditions (optional)" />
-          <input id="edit-product-opened-shelf-life-hours" type="number" placeholder="Opened shelf life hours (optional)" />
-          <input id="edit-product-cost-price" type="number" step="0.01" min="0" placeholder="Cost price (optional)" />
+          <input id="edit-product-allergens" data-i18n-ph="products.phAllergens" placeholder="Allergens (optional)" />
+          <input id="edit-product-storage-conditions" data-i18n-ph="products.phStorageConditions" placeholder="Storage conditions (optional)" />
+          <input id="edit-product-opened-shelf-life-hours" type="number" data-i18n-ph="products.phOpenedShelfLifeHours" placeholder="Opened shelf life hours (optional)" />
+          <input id="edit-product-cost-price" type="number" step="0.01" min="0" data-i18n-ph="products.phCostPrice" placeholder="Cost price (optional)" />
           <div style="display:flex;gap:8px;">
-            <button type="submit" style="flex:1;">Save Changes</button>
-            <button type="button" id="edit-cancel-btn" style="flex:1;background:#64748b;">Cancel</button>
+            <button type="submit" style="flex:1;" data-i18n="products.saveChanges">Save Changes</button>
+            <button type="button" id="edit-cancel-btn" style="flex:1;background:#64748b;" data-i18n="products.cancel">Cancel</button>
           </div>
         </form>
       </div>

@@ -26,34 +26,34 @@
 
     <main class="dashboard-grid">
       <section class="panel" data-write>
-        <h2>Create Admin</h2>
+        <h2 data-i18n="admins.createAdmin">Create Admin</h2>
         <form id="admin-form" class="stack">
-          <input id="admin-email" type="email" placeholder="Email" required />
-          <input id="admin-password" type="password" placeholder="Password" required minlength="8" autocomplete="new-password" />
+          <input id="admin-email" type="email" data-i18n-ph="admins.emailPh" placeholder="Email" required />
+          <input id="admin-password" type="password" data-i18n-ph="admins.passwordPh" placeholder="Password" required minlength="8" autocomplete="new-password" />
           <select id="admin-role" required>
             <option value="platform_admin">platform_admin</option>
             <option value="brand_admin">brand_admin</option>
             <option value="viewer">viewer</option>
           </select>
           <select id="admin-brand">
-            <option value="">No brand (platform-wide)</option>
+            <option value="" data-i18n="admins.noBrand">No brand (platform-wide)</option>
           </select>
-          <p class="hint">brand_admin requires a brand; viewer is read-only.</p>
-          <button type="submit">Create Admin</button>
+          <p class="hint" data-i18n="admins.roleHint">brand_admin requires a brand; viewer is read-only.</p>
+          <button type="submit" data-i18n="admins.createAdminBtn">Create Admin</button>
         </form>
       </section>
 
       <section class="panel wide">
-        <h2>Admins</h2>
+        <h2 data-i18n="admins.listTitle">Admins</h2>
         <div id="admins-controls"></div>
         <table>
           <thead>
             <tr>
-              <th>ID</th>
-              <th>Email</th>
-              <th>Role</th>
-              <th>Brand</th>
-              <th>Status</th>
+              <th data-i18n="admins.thId">ID</th>
+              <th data-i18n="admins.thEmail">Email</th>
+              <th data-i18n="admins.thRole">Role</th>
+              <th data-i18n="admins.thBrand">Brand</th>
+              <th data-i18n="admins.thStatus">Status</th>
               <th></th>
             </tr>
           </thead>
@@ -65,7 +65,7 @@
     <!-- Edit Admin Modal -->
     <div id="edit-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:100;align-items:center;justify-content:center;">
       <div class="card" style="width:min(480px,94vw);max-height:90vh;overflow-y:auto;">
-        <h2>Edit Admin</h2>
+        <h2 data-i18n="admins.editAdmin">Edit Admin</h2>
         <form id="edit-admin-form" class="stack">
           <input type="hidden" id="edit-admin-id" />
           <p class="hint" id="edit-admin-email"></p>
@@ -75,14 +75,14 @@
             <option value="viewer">viewer</option>
           </select>
           <select id="edit-admin-brand">
-            <option value="">No brand (platform-wide)</option>
+            <option value="" data-i18n="admins.noBrand">No brand (platform-wide)</option>
           </select>
           <label style="display:flex;align-items:center;gap:8px;font-weight:400;">
-            <input id="edit-admin-disabled" type="checkbox" style="width:auto;" /> Disabled
+            <input id="edit-admin-disabled" type="checkbox" style="width:auto;" /> <span data-i18n="admins.disabled">Disabled</span>
           </label>
           <div style="display:flex;gap:8px;">
-            <button type="submit" style="flex:1;">Save Changes</button>
-            <button type="button" id="edit-cancel-btn" style="flex:1;background:#64748b;">Cancel</button>
+            <button type="submit" style="flex:1;" data-i18n="admins.saveChanges">Save Changes</button>
+            <button type="button" id="edit-cancel-btn" style="flex:1;background:#64748b;" data-i18n="admins.cancel">Cancel</button>
           </div>
         </form>
       </div>

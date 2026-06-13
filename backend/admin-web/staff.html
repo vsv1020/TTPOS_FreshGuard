@@ -26,32 +26,32 @@
 
     <main class="dashboard-grid">
       <section class="panel">
-        <h2>Select Store</h2>
+        <h2 data-i18n="staff.selectStore">Select Store</h2>
         <select id="store-select"></select>
       </section>
 
       <section class="panel" data-write>
-        <h2>Add Staff</h2>
+        <h2 data-i18n="staff.addStaff">Add Staff</h2>
         <form id="staff-form" class="stack">
-          <input id="staff-name" placeholder="Staff name" required />
-          <input id="staff-pin" placeholder="PIN" required />
+          <input id="staff-name" data-i18n-ph="staff.namePh" placeholder="Staff name" required />
+          <input id="staff-pin" data-i18n-ph="staff.pinPh" placeholder="PIN" required />
           <select id="staff-role">
-            <option value="staff">staff</option>
-            <option value="manager">manager</option>
+            <option value="staff" data-i18n="staff.roleStaff">staff</option>
+            <option value="manager" data-i18n="staff.roleManager">manager</option>
           </select>
-          <button type="submit">Add Staff</button>
+          <button type="submit" data-i18n="staff.addStaffBtn">Add Staff</button>
         </form>
       </section>
 
       <section class="panel wide">
-        <h2>Staff</h2>
+        <h2 data-i18n="staff.listTitle">Staff</h2>
         <table>
           <thead>
             <tr>
-              <th>ID</th>
-              <th>Name</th>
-              <th>Role</th>
-              <th>Active</th>
+              <th data-i18n="staff.thId">ID</th>
+              <th data-i18n="staff.thName">Name</th>
+              <th data-i18n="staff.thRole">Role</th>
+              <th data-i18n="staff.thActive">Active</th>
               <th></th>
             </tr>
           </thead>
@@ -63,22 +63,22 @@
     <!-- Edit Staff Modal -->
     <div id="edit-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:100;align-items:center;justify-content:center;">
       <div class="card" style="width:min(420px,94vw);max-height:90vh;overflow-y:auto;">
-        <h2>Edit Staff</h2>
+        <h2 data-i18n="staff.editStaff">Edit Staff</h2>
         <form id="edit-staff-form" class="stack">
           <input type="hidden" id="edit-staff-id" />
-          <input id="edit-staff-name" placeholder="Staff name" required />
-          <input id="edit-staff-pin" placeholder="New PIN (leave blank to keep)" />
+          <input id="edit-staff-name" data-i18n-ph="staff.namePh" placeholder="Staff name" required />
+          <input id="edit-staff-pin" data-i18n-ph="staff.newPinPh" placeholder="New PIN (leave blank to keep)" />
           <select id="edit-staff-role">
-            <option value="staff">staff</option>
-            <option value="manager">manager</option>
+            <option value="staff" data-i18n="staff.roleStaff">staff</option>
+            <option value="manager" data-i18n="staff.roleManager">manager</option>
           </select>
           <label style="display:flex;align-items:center;gap:8px;font-weight:600;">
             <input type="checkbox" id="edit-staff-active" style="width:auto;padding:0;border:none;" />
-            Active
+            <span data-i18n="staff.active">Active</span>
           </label>
           <div style="display:flex;gap:8px;">
-            <button type="submit" style="flex:1;">Save Changes</button>
-            <button type="button" id="edit-cancel-btn" style="flex:1;background:#64748b;">Cancel</button>
+            <button type="submit" style="flex:1;" data-i18n="staff.saveChanges">Save Changes</button>
+            <button type="button" id="edit-cancel-btn" style="flex:1;background:#64748b;" data-i18n="staff.cancel">Cancel</button>
           </div>
         </form>
       </div>

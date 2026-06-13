@@ -26,27 +26,27 @@
 
     <main class="dashboard-grid">
       <section class="panel wide">
-        <h2>Audit Logs</h2>
+        <h2 data-i18n="audit.title">Audit Logs</h2>
         <form id="audit-filter-form" class="filter-row">
-          <input id="audit-actor" placeholder="Actor (email / staff id)" />
+          <input id="audit-actor" placeholder="Actor (email / staff id)" data-i18n-ph="audit.phActor" />
           <select id="audit-action">
-            <option value="">All actions</option>
+            <option value="" data-i18n="audit.allActions">All actions</option>
           </select>
-          <input id="audit-from" type="date" title="From date" />
-          <input id="audit-to" type="date" title="To date" />
-          <button type="submit">Apply Filters</button>
+          <input id="audit-from" type="date" title="From date" data-i18n-title="audit.fromDate" />
+          <input id="audit-to" type="date" title="To date" data-i18n-title="audit.toDate" />
+          <button type="submit" data-i18n="audit.applyFilters">Apply Filters</button>
         </form>
         <div id="audit-controls"></div>
         <table>
           <thead>
             <tr>
-              <th>Time</th>
-              <th>Actor Type</th>
-              <th>Actor</th>
-              <th>Action</th>
-              <th>Target</th>
-              <th>Detail</th>
-              <th>IP</th>
+              <th data-i18n="audit.thTime">Time</th>
+              <th data-i18n="audit.thActorType">Actor Type</th>
+              <th data-i18n="audit.thActor">Actor</th>
+              <th data-i18n="audit.thAction">Action</th>
+              <th data-i18n="audit.thTarget">Target</th>
+              <th data-i18n="audit.thDetail">Detail</th>
+              <th data-i18n="audit.thIp">IP</th>
             </tr>
           </thead>
           <tbody id="audit-table"></tbody>

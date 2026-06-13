@@ -26,21 +26,21 @@
 
     <main class="dashboard-grid">
       <section class="panel wide">
-        <h2>Unhandled Expired by Store -> Product</h2>
-        <p class="hint">Rows are grouped by store and product. Unhandled expired count is the key metric for follow-up.</p>
+        <h2 data-i18n="report.title">Unhandled Expired by Store -> Product</h2>
+        <p class="hint" data-i18n="report.hint">Rows are grouped by store and product. Unhandled expired count is the key metric for follow-up.</p>
         <div class="filter-row">
-          <button id="refresh-report" type="button">Refresh</button>
-          <button id="export-csv-btn" type="button" style="background:#0369a1;">Export CSV</button>
+          <button id="refresh-report" type="button" data-i18n="report.refresh">Refresh</button>
+          <button id="export-csv-btn" type="button" style="background:#0369a1;" data-i18n="report.exportCsv">Export CSV</button>
         </div>
         <div id="report-controls"></div>
         <table>
           <thead>
             <tr>
-              <th>Store</th>
-              <th>Product</th>
-              <th>Unhandled Expired</th>
-              <th>Expired Total</th>
-              <th>Handled</th>
+              <th data-i18n="report.colStore">Store</th>
+              <th data-i18n="report.colProduct">Product</th>
+              <th data-i18n="report.colUnhandled">Unhandled Expired</th>
+              <th data-i18n="report.colExpiredTotal">Expired Total</th>
+              <th data-i18n="report.colHandled">Handled</th>
             </tr>
           </thead>
           <tbody id="report-table"></tbody>

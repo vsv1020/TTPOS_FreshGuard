@@ -26,79 +26,79 @@
 
     <main class="dashboard-grid">
       <section class="panel" data-write>
-        <h2>Create Brand</h2>
+        <h2 data-i18n="binding.createBrand">Create Brand</h2>
         <form id="brand-form" class="stack">
-          <input id="brand-name" placeholder="Brand name" required />
-          <button type="submit">Create Brand</button>
+          <input id="brand-name" data-i18n-ph="binding.brandNamePh" placeholder="Brand name" required />
+          <button type="submit" data-i18n="binding.createBrandBtn">Create Brand</button>
         </form>
       </section>
 
       <section class="panel" data-write>
-        <h2>Create Store</h2>
+        <h2 data-i18n="binding.createStore">Create Store</h2>
         <form id="store-form" class="stack">
           <select id="store-brand" required></select>
-          <input id="store-name" placeholder="Store name" required />
-          <button type="submit">Create Store</button>
+          <input id="store-name" data-i18n-ph="binding.storeNamePh" placeholder="Store name" required />
+          <button type="submit" data-i18n="binding.createStoreBtn">Create Store</button>
         </form>
       </section>
 
       <section class="panel" data-write>
-        <h2>Generate Binding Code</h2>
+        <h2 data-i18n="binding.generateCode">Generate Binding Code</h2>
         <form id="binding-form" class="stack">
           <select id="binding-store" required></select>
           <input id="binding-hours" type="number" min="1" value="24" required />
-          <button type="submit">Generate Code</button>
+          <button type="submit" data-i18n="binding.generateBtn">Generate Code</button>
         </form>
-        <p class="hint">One-time code for store device activation (no staff login).</p>
+        <p class="hint" data-i18n="binding.codeHint">One-time code for store device activation (no staff login).</p>
       </section>
 
       <section class="panel" data-write>
-        <h2>Brand Reminder Config</h2>
+        <h2 data-i18n="binding.reminderConfig">Brand Reminder Config</h2>
         <form id="reminder-config-form" class="stack">
           <select id="reminder-config-brand" required></select>
-          <input id="reminder-threshold-days" type="number" min="0" step="1" placeholder="Expiry warning threshold (days)" required />
-          <button type="submit">Save Reminder Config</button>
+          <input id="reminder-threshold-days" type="number" min="0" step="1" data-i18n-ph="binding.thresholdPh" placeholder="Expiry warning threshold (days)" required />
+          <button type="submit" data-i18n="binding.saveReminderBtn">Save Reminder Config</button>
         </form>
         <p id="reminder-config-hint" class="hint"></p>
       </section>
 
       <section class="panel wide" data-write>
-        <h2>临期促销规则 (Promo Rules)</h2>
+        <h2 data-i18n="binding.promoRules">临期促销规则 (Promo Rules)</h2>
         <div class="filter-row">
-          <label for="promo-brand">Brand</label>
+          <label for="promo-brand" data-i18n="binding.brand">Brand</label>
           <select id="promo-brand"></select>
         </div>
         <table>
           <thead>
             <tr>
-              <th>提前小时数</th>
-              <th>动作</th>
-              <th>折扣 %</th>
+              <th data-i18n="binding.thLeadHours">提前小时数</th>
+              <th data-i18n="binding.thAction">动作</th>
+              <th data-i18n="binding.thDiscount">折扣 %</th>
               <th></th>
             </tr>
           </thead>
           <tbody id="promo-rules-table"></tbody>
         </table>
         <div class="filter-row" style="margin-top: 12px;">
-          <button id="promo-add-rule" type="button">Add Rule</button>
-          <button id="promo-save" type="button">Save Promo Rules</button>
+          <button id="promo-add-rule" type="button" data-i18n="binding.addRule">Add Rule</button>
+          <button id="promo-save" type="button" data-i18n="binding.savePromoBtn">Save Promo Rules</button>
         </div>
-        <p id="promo-hint" class="hint">规则按提前小时数降序应用，临期提醒命中剩余时间最近的一档（打折需填折扣 %，下架无需折扣）。</p>
+        <p id="promo-hint" class="hint" data-i18n="binding.promoHint">规则按提前小时数降序应用，临期提醒命中剩余时间最近的一档（打折需填折扣 %，下架无需折扣）。</p>
       </section>
 
       <section class="panel wide">
-        <h2>Binding Codes</h2>
+        <h2 data-i18n="binding.codesTitle">Binding Codes</h2>
         <div id="binding-controls"></div>
         <table>
           <thead>
             <tr>
-              <th>Code</th>
-              <th>Brand</th>
-              <th>Store</th>
-              <th>Expires At</th>
-              <th>Used Status</th>
-              <th>Used At</th>
-              <th>Device</th>
+              <th data-i18n="binding.thCode">Code</th>
+              <th data-i18n="binding.thBrand">Brand</th>
+              <th data-i18n="binding.thStore">Store</th>
+              <th data-i18n="binding.thExpiresAt">Expires At</th>
+              <th data-i18n="binding.thUsedStatus">Used Status</th>
+              <th data-i18n="binding.thUsedAt">Used At</th>
+              <th data-i18n="binding.thDevice">Device</th>
             </tr>
           </thead>
           <tbody id="binding-table"></tbody>

@@ -27,56 +27,56 @@
     <main class="dashboard-grid">
       <!-- Create form -->
       <section class="panel" data-write>
-        <h2>Create Template</h2>
+        <h2 data-i18n="labelTemplates.createTitle">Create Template</h2>
         <form id="template-form" class="stack">
           <select id="template-brand" required></select>
-          <input id="template-name" placeholder="Template name" required />
-          <input id="template-width" type="number" min="1" placeholder="Width mm (e.g. 60)" />
-          <input id="template-height" type="number" min="1" placeholder="Height mm (e.g. 40)" />
-          <input id="template-dpi" type="number" min="1" placeholder="DPI (e.g. 200)" />
-          <label style="font-weight:600;font-size:0.9rem;margin-bottom:2px;">Body template</label>
-          <textarea id="template-body" rows="8" placeholder="e.g. {{product_name}}&#10;Expires: {{expires_at}}" style="border:1px solid #cbd5e1;border-radius:8px;padding:10px 11px;font-size:0.92rem;font-family:monospace;resize:vertical;"></textarea>
+          <input id="template-name" placeholder="Template name" data-i18n-ph="labelTemplates.phName" required />
+          <input id="template-width" type="number" min="1" placeholder="Width mm (e.g. 60)" data-i18n-ph="labelTemplates.phWidth" />
+          <input id="template-height" type="number" min="1" placeholder="Height mm (e.g. 40)" data-i18n-ph="labelTemplates.phHeight" />
+          <input id="template-dpi" type="number" min="1" placeholder="DPI (e.g. 200)" data-i18n-ph="labelTemplates.phDpi" />
+          <label style="font-weight:600;font-size:0.9rem;margin-bottom:2px;" data-i18n="labelTemplates.bodyTemplate">Body template</label>
+          <textarea id="template-body" rows="8" placeholder="e.g. {{product_name}}&#10;Expires: {{expires_at}}" data-i18n-ph="labelTemplates.phBody" style="border:1px solid #cbd5e1;border-radius:8px;padding:10px 11px;font-size:0.92rem;font-family:monospace;resize:vertical;"></textarea>
           <label style="display:flex;align-items:center;gap:8px;font-weight:600;cursor:pointer;">
             <input id="template-default" type="checkbox" style="width:auto;padding:0;border:none;" />
-            Set as default for brand
+            <span data-i18n="labelTemplates.setDefault">Set as default for brand</span>
           </label>
-          <button type="submit">Create Template</button>
+          <button type="submit" data-i18n="labelTemplates.createBtn">Create Template</button>
         </form>
       </section>
 
       <!-- Placeholder reference -->
       <section class="panel">
-        <h2>Available Placeholders</h2>
-        <p class="hint">Copy any placeholder into your body template.</p>
+        <h2 data-i18n="labelTemplates.placeholdersTitle">Available Placeholders</h2>
+        <p class="hint" data-i18n="labelTemplates.placeholdersHint">Copy any placeholder into your body template.</p>
         <table>
           <thead>
-            <tr><th>Placeholder</th><th>Description</th></tr>
+            <tr><th data-i18n="labelTemplates.thPlaceholder">Placeholder</th><th data-i18n="labelTemplates.thDescription">Description</th></tr>
           </thead>
           <tbody>
-            <tr><td><code>{{product_name}}</code></td><td>Product name</td></tr>
-            <tr><td><code>{{expires_at}}</code></td><td>Expiry date/time</td></tr>
-            <tr><td><code>{{printed_at}}</code></td><td>Print date/time</td></tr>
-            <tr><td><code>{{batch_id}}</code></td><td>Batch ID number</td></tr>
-            <tr><td><code>{{store_name}}</code></td><td>Store name</td></tr>
-            <tr><td><code>{{barcode}}</code></td><td>Label barcode string</td></tr>
-            <tr><td><code>{{allergens}}</code></td><td>Allergen info</td></tr>
-            <tr><td><code>{{storage}}</code></td><td>Storage conditions</td></tr>
-            <tr><td><code>{{opened}}</code></td><td>Opened shelf life (hours)</td></tr>
-            <tr><td><code>{{color_label}}</code></td><td>Color code text mark (e.g. 红·畜肉禽类)</td></tr>
-            <tr><td><code>{{color_code}}</code></td><td>Color code value (red/blue/green/yellow)</td></tr>
+            <tr><td><code>{{product_name}}</code></td><td data-i18n="labelTemplates.phProductName">Product name</td></tr>
+            <tr><td><code>{{expires_at}}</code></td><td data-i18n="labelTemplates.phExpiresAt">Expiry date/time</td></tr>
+            <tr><td><code>{{printed_at}}</code></td><td data-i18n="labelTemplates.phPrintedAt">Print date/time</td></tr>
+            <tr><td><code>{{batch_id}}</code></td><td data-i18n="labelTemplates.phBatchId">Batch ID number</td></tr>
+            <tr><td><code>{{store_name}}</code></td><td data-i18n="labelTemplates.phStoreName">Store name</td></tr>
+            <tr><td><code>{{barcode}}</code></td><td data-i18n="labelTemplates.phBarcode">Label barcode string</td></tr>
+            <tr><td><code>{{allergens}}</code></td><td data-i18n="labelTemplates.phAllergens">Allergen info</td></tr>
+            <tr><td><code>{{storage}}</code></td><td data-i18n="labelTemplates.phStorage">Storage conditions</td></tr>
+            <tr><td><code>{{opened}}</code></td><td data-i18n="labelTemplates.phOpened">Opened shelf life (hours)</td></tr>
+            <tr><td><code>{{color_label}}</code></td><td data-i18n="labelTemplates.phColorLabel">Color code text mark (e.g. 红·畜肉禽类)</td></tr>
+            <tr><td><code>{{color_code}}</code></td><td data-i18n="labelTemplates.phColorCode">Color code value (red/blue/green/yellow)</td></tr>
           </tbody>
         </table>
 
-        <h2 style="margin-top:18px;">Preview</h2>
-        <p class="hint">Select a template row to enable live preview.</p>
+        <h2 style="margin-top:18px;" data-i18n="labelTemplates.previewTitle">Preview</h2>
+        <p class="hint" data-i18n="labelTemplates.previewHint">Select a template row to enable live preview.</p>
         <pre id="preview-output" style="white-space:pre-wrap;background:#0f172a;color:#e2e8f0;padding:12px;border-radius:8px;min-height:80px;font-size:0.88rem;"></pre>
-        <button id="preview-btn" type="button" disabled style="margin-top:8px;">Preview Selected</button>
+        <button id="preview-btn" type="button" disabled style="margin-top:8px;" data-i18n="labelTemplates.previewSelectedBtn">Preview Selected</button>
       </section>
 
       <!-- Visual preview -->
       <section class="panel wide">
-        <h2>Visual Preview</h2>
-        <p class="hint">
+        <h2 data-i18n="labelTemplates.visualPreviewTitle">Visual Preview</h2>
+        <p class="hint" data-i18n="labelTemplates.visualPreviewHint">
           1:1 canvas render at label size (mm) and DPI with sample data. Follows the create form as
           you type; click Select on a row to preview that template instead. Barcodes are mocked as
           black bars; dashed lines are 2mm margin guides (not printed).
@@ -98,17 +98,17 @@
 
       <!-- Templates table -->
       <section class="panel wide">
-        <h2>Templates</h2>
+        <h2 data-i18n="labelTemplates.templatesTitle">Templates</h2>
         <div id="templates-controls"></div>
         <table>
           <thead>
             <tr>
-              <th>ID</th>
-              <th>Brand</th>
-              <th>Name</th>
-              <th>Size (mm)</th>
-              <th>DPI</th>
-              <th>Default</th>
+              <th data-i18n="labelTemplates.thId">ID</th>
+              <th data-i18n="labelTemplates.thBrand">Brand</th>
+              <th data-i18n="labelTemplates.thName">Name</th>
+              <th data-i18n="labelTemplates.thSize">Size (mm)</th>
+              <th data-i18n="labelTemplates.thDpi">DPI</th>
+              <th data-i18n="labelTemplates.thDefault">Default</th>
               <th></th>
             </tr>
           </thead>
@@ -120,26 +120,26 @@
     <!-- Edit modal -->
     <div id="edit-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:100;align-items:center;justify-content:center;">
       <div class="card" style="width:min(520px,94vw);max-height:90vh;overflow-y:auto;">
-        <h2>Edit Template</h2>
+        <h2 data-i18n="labelTemplates.editTitle">Edit Template</h2>
         <form id="edit-template-form" class="stack">
           <input type="hidden" id="edit-template-id" />
-          <input id="edit-template-name" placeholder="Template name" required />
-          <input id="edit-template-width" type="number" min="1" placeholder="Width mm" />
-          <input id="edit-template-height" type="number" min="1" placeholder="Height mm" />
-          <input id="edit-template-dpi" type="number" min="1" placeholder="DPI" />
-          <label style="font-weight:600;font-size:0.9rem;margin-bottom:2px;">Body template</label>
+          <input id="edit-template-name" placeholder="Template name" data-i18n-ph="labelTemplates.phName" required />
+          <input id="edit-template-width" type="number" min="1" placeholder="Width mm" data-i18n-ph="labelTemplates.phWidthShort" />
+          <input id="edit-template-height" type="number" min="1" placeholder="Height mm" data-i18n-ph="labelTemplates.phHeightShort" />
+          <input id="edit-template-dpi" type="number" min="1" placeholder="DPI" data-i18n-ph="labelTemplates.phDpiShort" />
+          <label style="font-weight:600;font-size:0.9rem;margin-bottom:2px;" data-i18n="labelTemplates.bodyTemplate">Body template</label>
           <textarea id="edit-template-body" rows="8" style="border:1px solid #cbd5e1;border-radius:8px;padding:10px 11px;font-size:0.92rem;font-family:monospace;resize:vertical;"></textarea>
-          <label style="font-weight:600;font-size:0.9rem;margin-bottom:2px;">Live preview</label>
+          <label style="font-weight:600;font-size:0.9rem;margin-bottom:2px;" data-i18n="labelTemplates.livePreview">Live preview</label>
           <div style="overflow:auto;background:#f1f5f9;border:1px solid #cbd5e1;border-radius:8px;padding:10px;">
             <canvas id="edit-preview-canvas" style="background:#fff;max-width:100%;height:auto;box-shadow:0 1px 4px rgba(15,23,42,0.18);"></canvas>
           </div>
           <label style="display:flex;align-items:center;gap:8px;font-weight:600;cursor:pointer;">
             <input id="edit-template-default" type="checkbox" style="width:auto;padding:0;border:none;" />
-            Set as default for brand
+            <span data-i18n="labelTemplates.setDefault">Set as default for brand</span>
           </label>
           <div style="display:flex;gap:8px;">
-            <button type="submit" style="flex:1;">Save Changes</button>
-            <button type="button" id="edit-cancel-btn" style="flex:1;background:#64748b;">Cancel</button>
+            <button type="submit" style="flex:1;" data-i18n="labelTemplates.saveChangesBtn">Save Changes</button>
+            <button type="button" id="edit-cancel-btn" style="flex:1;background:#64748b;" data-i18n="labelTemplates.cancelBtn">Cancel</button>
           </div>
         </form>
       </div>

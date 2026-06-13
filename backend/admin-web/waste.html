@@ -147,34 +147,34 @@
 
     <main class="dashboard-grid">
       <section class="panel wide">
-        <h2>Waste Dashboard</h2>
-        <p class="hint">Waste rate = discarded batches / total batches in range. Discard amount sums product cost_price; batches without a cost count as 0.</p>
+        <h2 data-i18n="waste.title">Waste Dashboard</h2>
+        <p class="hint" data-i18n="waste.intro">Waste rate = discarded batches / total batches in range. Discard amount sums product cost_price; batches without a cost count as 0.</p>
         <div class="filter-row">
-          <label for="waste-from">From</label>
+          <label for="waste-from" data-i18n="waste.from">From</label>
           <input id="waste-from" type="date" />
-          <label for="waste-to">To</label>
+          <label for="waste-to" data-i18n="waste.to">To</label>
           <input id="waste-to" type="date" />
-          <label for="waste-brand">Brand</label>
+          <label for="waste-brand" data-i18n="waste.brand">Brand</label>
           <select id="waste-brand"></select>
-          <label for="waste-store">Store</label>
+          <label for="waste-store" data-i18n="waste.store">Store</label>
           <select id="waste-store"></select>
-          <button id="waste-refresh" type="button">Refresh</button>
+          <button id="waste-refresh" type="button" data-i18n="waste.refresh">Refresh</button>
         </div>
         <div class="waste-kpi-grid">
           <div class="waste-kpi-card">
-            <span class="waste-kpi-label">Total Batches</span>
+            <span class="waste-kpi-label" data-i18n="waste.kpiTotalBatches">Total Batches</span>
             <span class="waste-kpi-value" id="waste-total-batches">—</span>
           </div>
           <div class="waste-kpi-card danger">
-            <span class="waste-kpi-label">Discarded</span>
+            <span class="waste-kpi-label" data-i18n="waste.kpiDiscarded">Discarded</span>
             <span class="waste-kpi-value" id="waste-discarded-count">—</span>
           </div>
           <div class="waste-kpi-card danger">
-            <span class="waste-kpi-label">Waste Rate</span>
+            <span class="waste-kpi-label" data-i18n="waste.kpiWasteRate">Waste Rate</span>
             <span class="waste-kpi-value" id="waste-rate">—</span>
           </div>
           <div class="waste-kpi-card">
-            <span class="waste-kpi-label">Discard Amount</span>
+            <span class="waste-kpi-label" data-i18n="waste.kpiDiscardAmount">Discard Amount</span>
             <span class="waste-kpi-value" id="waste-discard-amount">—</span>
           </div>
         </div>
@@ -182,16 +182,16 @@
       </section>
 
       <section class="panel wide">
-        <h2>Store Waste Ranking</h2>
-        <p class="hint">Sorted by waste rate (worst first). Stores above the overall waste rate are highlighted in red.</p>
+        <h2 data-i18n="waste.rankingTitle">Store Waste Ranking</h2>
+        <p class="hint" data-i18n="waste.rankingHint">Sorted by waste rate (worst first). Stores above the overall waste rate are highlighted in red.</p>
         <table>
           <thead>
             <tr>
-              <th>Store</th>
-              <th>Total Batches</th>
-              <th>Discarded</th>
-              <th>Waste Rate</th>
-              <th>Discard Amount</th>
+              <th data-i18n="waste.colStore">Store</th>
+              <th data-i18n="waste.colTotalBatches">Total Batches</th>
+              <th data-i18n="waste.colDiscarded">Discarded</th>
+              <th data-i18n="waste.colWasteRate">Waste Rate</th>
+              <th data-i18n="waste.colDiscardAmount">Discard Amount</th>
             </tr>
           </thead>
           <tbody id="waste-by-store"></tbody>
@@ -199,14 +199,14 @@
       </section>
 
       <section class="panel">
-        <h2>Top Waste Products</h2>
+        <h2 data-i18n="waste.topProductsTitle">Top Waste Products</h2>
         <table>
           <thead>
             <tr>
-              <th>Product</th>
-              <th>Discarded</th>
-              <th>Waste Rate</th>
-              <th>Amount</th>
+              <th data-i18n="waste.colProduct">Product</th>
+              <th data-i18n="waste.colDiscarded">Discarded</th>
+              <th data-i18n="waste.colWasteRate">Waste Rate</th>
+              <th data-i18n="waste.colAmount">Amount</th>
             </tr>
           </thead>
           <tbody id="waste-by-product"></tbody>
@@ -214,12 +214,12 @@
       </section>
 
       <section class="panel">
-        <h2>Discard Reasons</h2>
+        <h2 data-i18n="waste.reasonsTitle">Discard Reasons</h2>
         <div id="waste-by-reason"></div>
       </section>
 
       <section class="panel wide">
-        <h2>Discard Trend</h2>
+        <h2 data-i18n="waste.trendTitle">Discard Trend</h2>
         <div id="waste-trend"></div>
       </section>
     </main>

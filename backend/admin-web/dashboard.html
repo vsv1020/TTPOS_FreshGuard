@@ -138,34 +138,34 @@
     <!-- P2-5: date range + brand/store drill-down filters -->
     <div class="dash-filters">
       <div class="filter-row">
-        <label for="dash-from">From</label>
+        <label for="dash-from" data-i18n="dashboard.filterFrom">From</label>
         <input id="dash-from" type="date" />
-        <label for="dash-to">To</label>
+        <label for="dash-to" data-i18n="dashboard.filterTo">To</label>
         <input id="dash-to" type="date" />
-        <label for="dash-brand">Brand</label>
+        <label for="dash-brand" data-i18n="dashboard.filterBrand">Brand</label>
         <select id="dash-brand"></select>
-        <label for="dash-store">Store</label>
+        <label for="dash-store" data-i18n="dashboard.filterStore">Store</label>
         <select id="dash-store"></select>
-        <button id="dash-refresh" type="button">Refresh</button>
+        <button id="dash-refresh" type="button" data-i18n="dashboard.refresh">Refresh</button>
       </div>
     </div>
 
     <!-- KPI Cards -->
     <div class="kpi-grid" id="kpi-grid">
       <div class="kpi-card">
-        <span class="kpi-label">今日到期</span>
+        <span class="kpi-label" data-i18n="dashboard.kpiToday">今日到期</span>
         <span class="kpi-value loading-text" id="kpi-today">—</span>
       </div>
       <div class="kpi-card danger" id="kpi-card-unhandled">
-        <span class="kpi-label">未处置过期</span>
+        <span class="kpi-label" data-i18n="dashboard.kpiUnhandled">未处置过期</span>
         <span class="kpi-value loading-text" id="kpi-unhandled">—</span>
       </div>
       <div class="kpi-card" id="kpi-card-rate">
-        <span class="kpi-label">近30天处置率</span>
+        <span class="kpi-label" data-i18n="dashboard.kpiRate">近30天处置率</span>
         <span class="kpi-value loading-text" id="kpi-rate">—</span>
       </div>
       <div class="kpi-card">
-        <span class="kpi-label">门店数</span>
+        <span class="kpi-label" data-i18n="dashboard.kpiStores">门店数</span>
         <span class="kpi-value loading-text" id="kpi-stores">—</span>
       </div>
     </div>
@@ -173,21 +173,21 @@
     <!-- Charts -->
     <div class="charts-grid">
       <div class="chart-panel">
-        <h2>门店未处置到期品排行</h2>
+        <h2 data-i18n="dashboard.chartRanking">门店未处置到期品排行</h2>
         <div class="chart-container">
           <canvas id="chart-ranking"></canvas>
         </div>
       </div>
 
       <div class="chart-panel">
-        <h2>近30天损耗趋势</h2>
+        <h2 data-i18n="dashboard.chartLoss">近30天损耗趋势</h2>
         <div class="chart-container">
           <canvas id="chart-loss"></canvas>
         </div>
       </div>
 
       <div class="chart-panel">
-        <h2>巡检平均分趋势</h2>
+        <h2 data-i18n="dashboard.chartScore">巡检平均分趋势</h2>
         <div class="chart-container">
           <canvas id="chart-score"></canvas>
         </div>
@@ -196,17 +196,17 @@
 
     <!-- P2-5: store ranking table -->
     <div class="table-panel">
-      <h2>门店排名</h2>
-      <p class="hint">点击列标题排序。红色单元格表示该项需要关注（处理率 &lt; 80%、损耗率 &gt; 10%、巡检均分 &lt; 60、存在未关闭/逾期问题）。</p>
+      <h2 data-i18n="dashboard.rankingTitle">门店排名</h2>
+      <p class="hint" data-i18n="dashboard.rankingHint">点击列标题排序。红色单元格表示该项需要关注（处理率 &lt; 80%、损耗率 &gt; 10%、巡检均分 &lt; 60、存在未关闭/逾期问题）。</p>
       <table>
         <thead>
           <tr id="ranking-head">
-            <th class="sortable" data-key="storeName">门店</th>
-            <th class="sortable" data-key="handleRate">处理率</th>
-            <th class="sortable" data-key="wasteRate">损耗率</th>
-            <th class="sortable" data-key="avgInspectionScore">巡检均分</th>
-            <th class="sortable" data-key="openIssues">未关闭问题</th>
-            <th class="sortable" data-key="overdueIssues">逾期问题</th>
+            <th class="sortable" data-key="storeName" data-i18n="dashboard.colStore">门店</th>
+            <th class="sortable" data-key="handleRate" data-i18n="dashboard.colHandleRate">处理率</th>
+            <th class="sortable" data-key="wasteRate" data-i18n="dashboard.colWasteRate">损耗率</th>
+            <th class="sortable" data-key="avgInspectionScore" data-i18n="dashboard.colAvgScore">巡检均分</th>
+            <th class="sortable" data-key="openIssues" data-i18n="dashboard.colOpenIssues">未关闭问题</th>
+            <th class="sortable" data-key="overdueIssues" data-i18n="dashboard.colOverdueIssues">逾期问题</th>
           </tr>
         </thead>
         <tbody id="store-ranking-table"></tbody>

@@ -87,4 +87,19 @@ describe('admin-web i18n dictionary', () => {
     expect(AdminI18n.t('nav.dashboard', 'th')).toBe('แดชบอร์ด');
     expect(AdminI18n.t('does.not.exist', 'en')).toBe('does.not.exist');
   });
+
+  test('every data-i18n key used in any page exists in the dictionary', () => {
+    const re = /data-i18n(?:-ph|-title)?="([^"]+)"/g;
+    const missing = [];
+    PAGES.concat(['login']).forEach((page) => {
+      const fp = path.join(WEB_DIR, `${page}.html`);
+      if (!fs.existsSync(fp)) return;
+      const html = fs.readFileSync(fp, 'utf8');
+      let m;
+      while ((m = re.exec(html))) {
+        if (!(m[1] in AdminI18n.STRINGS.zh)) missing.push(`${page}: ${m[1]}`);
+      }
+    });
+    expect(missing).toEqual([]);
+  });
 });

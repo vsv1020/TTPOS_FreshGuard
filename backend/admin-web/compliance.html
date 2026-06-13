@@ -124,19 +124,19 @@
 
     <main class="dashboard-grid">
       <section class="panel wide no-print">
-        <h2>合规报告（日管控 · 周排查 · 月调度）</h2>
-        <p class="hint">依据市场监管总局食品安全「日管控、周排查、月调度」制度实时生成，供监管检查使用。</p>
+        <h2 data-i18n="compliance.title">合规报告（日管控 · 周排查 · 月调度）</h2>
+        <p class="hint" data-i18n="compliance.intro">依据市场监管总局食品安全「日管控、周排查、月调度」制度实时生成，供监管检查使用。</p>
         <div class="filter-row">
-          <label for="comp-type">报告类型</label>
+          <label for="comp-type" data-i18n="compliance.reportType">报告类型</label>
           <select id="comp-type"></select>
-          <label for="comp-date" id="comp-date-label">日期</label>
+          <label for="comp-date" id="comp-date-label" data-i18n="compliance.date">日期</label>
           <input id="comp-date" type="date" />
-          <label for="comp-brand">品牌</label>
+          <label for="comp-brand" data-i18n="compliance.brand">品牌</label>
           <select id="comp-brand"></select>
-          <label for="comp-store">门店</label>
+          <label for="comp-store" data-i18n="compliance.store">门店</label>
           <select id="comp-store"></select>
-          <button id="comp-generate" type="button">生成报告</button>
-          <button id="comp-print" type="button" disabled>打印视图</button>
+          <button id="comp-generate" type="button" data-i18n="compliance.generate">生成报告</button>
+          <button id="comp-print" type="button" disabled data-i18n="compliance.print">打印视图</button>
         </div>
       </section>
 

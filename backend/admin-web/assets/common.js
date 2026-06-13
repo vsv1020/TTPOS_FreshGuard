@@ -421,9 +421,35 @@
     validatePromoRules
   };
 
-  // Auto-apply role-aware visibility on every page that loads common.js
-  // (scripts are included at the end of <body>, so the DOM is available).
+  // Marks the current nav link active by matching location.pathname against
+  // each link's href. Computing this at runtime (instead of hardcoding
+  // class="active" per page) keeps the nav markup identical on every page —
+  // which is what prevents links from appearing/disappearing as you navigate.
+  function markActiveNav(doc) {
+    const target = doc || document;
+    const view = target.defaultView || (typeof window !== 'undefined' ? window : null);
+    const loc = view && view.location;
+    if (!loc || !loc.pathname) {
+      return; // non-browser/test context: nothing to highlight
+    }
+    const path = loc.pathname.replace(/\/+$/, '');
+    target.querySelectorAll('.topnav a').forEach((link) => {
+      const href = (link.getAttribute('href') || '').replace(/\/+$/, '');
+      link.classList.toggle('active', href === path);
+    });
+  }
+
+  window.AdminCommon.markActiveNav = markActiveNav;
+
+  // Auto-apply on every page that loads common.js (scripts are at the end of
+  // <body>, so the DOM is available): i18n first (translate + mount the
+  // language switcher), then role visibility and the active nav highlight.
   if (typeof document !== 'undefined' && document.body) {
+    if (window.AdminI18n) {
+      window.AdminI18n.mountSwitcher(document);
+      window.AdminI18n.apply(document);
+    }
     applyRoleVisibility(document);
+    markActiveNav(document);
   }
 })();

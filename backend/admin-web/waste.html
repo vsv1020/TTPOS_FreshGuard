@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>FreshGuard Admin - Waste Dashboard</title>
+    <title data-i18n="title.waste">FreshGuard Admin - Waste Dashboard</title>
     <link rel="stylesheet" href="/admin/assets/styles.css" />
     <style>
       .waste-kpi-grid {
@@ -129,20 +129,20 @@
   </head>
   <body class="dashboard-page">
     <header class="topbar">
-      <h1>FreshGuard Admin</h1>
+      <h1 data-i18n="app.title">FreshGuard Admin</h1>
       <nav class="topnav">
-        <a href="/admin/dashboard">Dashboard</a>
-        <a href="/admin/binding">Binding</a>
-        <a href="/admin/products">Products</a>
-        <a href="/admin/staff">Staff</a>
-        <a href="/admin/label-templates">Label Templates</a>
-        <a href="/admin/report">Report</a>
-        <a class="active" href="/admin/waste">Waste</a>
-        <a href="/admin/compliance">Compliance</a>
-        <a href="/admin/audit-logs">Audit</a>
-        <a href="/admin/admins" data-nav="admins" hidden>Admins</a>
+        <a data-i18n="nav.dashboard" href="/admin/dashboard">Dashboard</a>
+        <a data-i18n="nav.binding" href="/admin/binding">Binding</a>
+        <a data-i18n="nav.products" href="/admin/products">Products</a>
+        <a data-i18n="nav.staff" href="/admin/staff">Staff</a>
+        <a data-i18n="nav.labelTemplates" href="/admin/label-templates">Label Templates</a>
+        <a data-i18n="nav.report" href="/admin/report">Report</a>
+        <a data-i18n="nav.waste" href="/admin/waste">Waste</a>
+        <a data-i18n="nav.compliance" href="/admin/compliance">Compliance</a>
+        <a data-i18n="nav.audit" href="/admin/audit-logs">Audit</a>
+        <a data-i18n="nav.admins" href="/admin/admins" data-nav="admins" hidden>Admins</a>
       </nav>
-      <button id="logout-btn" type="button">Log Out</button>
+      <button id="logout-btn" type="button" data-i18n="common.logout">Log Out</button>
     </header>
 
     <main class="dashboard-grid">
@@ -226,6 +226,7 @@
 
     <p id="page-message" class="page-message"></p>
 
+    <script src="/admin/assets/i18n.js"></script>
     <script src="/admin/assets/common.js"></script>
     <script src="/admin/assets/waste.js"></script>
   </body>

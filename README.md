@@ -154,21 +154,43 @@ This directory contains a minimal Flutter UI with:
 - Print labels (creates batch/reminders and returns rendered single/bilingual label text)
 - Reminder list (`expired`, `expiring`, `all`, with `thresholdDays` defaulting to `1`)
 - Handle reminder with reasons: discarded/sold/transferred
-- USB printer discovery for connected Android USB devices
-- Local printer settings persistence (selected USB device + profile)
+- Multi-transport label printing (see below)
+- Local printer settings persistence (transport + endpoint + profile)
 - Printer profile selection (`TSPL` or `CPCL`)
-- Android USB Host test print via platform channel + bulk transfer write
+
+The app targets both **iOS and Android** from one codebase.
 
 Quick start (on a machine with Flutter SDK installed):
 
 ```bash
 cd flutter_app
-flutter create .
 flutter pub get
 flutter run
 ```
 
 Default backend URL in the bind screen is `http://10.0.2.2:4000` (Android emulator).
+
+### Cross-platform label printing
+
+Printing goes through a `PrinterTransport` abstraction (`lib/printer/`); the
+pure-Dart `LabelCommandBuilder` generates TSPL/CPCL bytes and a selected
+transport delivers them. The connection picker is filtered by platform:
+
+| Transport | Android | iOS | Implementation |
+|---|:--:|:--:|---|
+| USB | ✅ | — | `freshguard/usb_printer` channel + Android USB Host (`MainActivity.kt`) |
+| Bluetooth LE | ✅ | ✅ | `flutter_blue_plus` (1.x, BSD/free) |
+| Bluetooth SPP | ✅ | — | `freshguard/bluetooth_spp` channel + Android RFCOMM (`MainActivity.kt`) |
+| Network | ✅ | ✅ | pure-Dart TCP to port 9100 |
+
+Platform constraints (not bugs): iOS has no generic USB host access, and classic
+Bluetooth SPP on iOS requires MFi-certified hardware — so **iOS exposes only
+BLE and network**. `flutter_blue_plus` is pinned to `^1.32.0`; its 2.x line
+requires a paid commercial license, while 1.x is BSD/free.
+
+Permissions: Android Bluetooth perms are in `AndroidManifest.xml`; iOS usage
+strings (`NSBluetoothAlwaysUsageDescription`, `NSLocalNetworkUsageDescription`,
+`NSCameraUsageDescription`) are in `ios/Runner/Info.plist`.
 
 ### Android USB Label Printing Setup (TSPL/CPCL)
 

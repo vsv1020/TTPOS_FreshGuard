@@ -1,9 +1,7 @@
 import 'dart:async';
-import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
 import '../api_client.dart';
 import '../color_codes.dart';
@@ -14,6 +12,7 @@ import '../paging.dart';
 import '../printer/ble_transport.dart';
 import '../printer/network_transport.dart';
 import '../printer/printer_settings.dart';
+import '../printer/printer_settings_store.dart';
 import '../printer/spp_transport.dart';
 import '../printer/transport.dart';
 import '../printer/usb_printer.dart';
@@ -26,11 +25,6 @@ import '../scanning/scan_page.dart';
 import '../session.dart';
 import '../storage/local_cache.dart';
 import '../widgets/staff_pin_dialog.dart';
-
-/// Current persistence key; [_legacyUsbPrinterSettingsKey] is read once for
-/// one-time migration of installs that saved USB-only settings.
-const _printerSettingsKey = 'freshguard_printer_settings';
-const _legacyUsbPrinterSettingsKey = 'freshguard_usb_printer_settings';
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({
@@ -116,7 +110,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   /// Transport types registered AND available on this platform.
   List<PrinterTransportType> get _availableTransportTypes =>
-      _transports.where((t) => t.isAvailable).map((t) => t.type).toList();
+      PrinterSettingsStore.availableTransportTypes(_transports);
 
   PrinterTransport get _activeTransport =>
       _transports.firstWhere((t) => t.type == _transportType);
@@ -541,43 +535,32 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   Future<void> _loadPrinterSettings() async {
-    final prefs = await SharedPreferences.getInstance();
     // Prefer the current key; fall back to the legacy USB-only key so existing
     // installs migrate their saved printer on first launch.
-    final raw = prefs.getString(_printerSettingsKey) ??
-        prefs.getString(_legacyUsbPrinterSettingsKey);
-    if (raw == null || raw.isEmpty) {
+    final settings = await PrinterSettingsStore.load();
+    if (settings == null || !mounted) {
       return;
     }
 
-    try {
-      final parsed = jsonDecode(raw) as Map<String, dynamic>;
-      final settings = PrinterSettings.fromJson(parsed);
-      if (!mounted) {
-        return;
+    // Only adopt the saved transport if it is available on this platform
+    // (e.g. a USB selection synced to an iOS device falls back gracefully).
+    final transport = _availableTransportTypes.contains(settings.transport)
+        ? settings.transport
+        : (_availableTransportTypes.isNotEmpty
+            ? _availableTransportTypes.first
+            : settings.transport);
+    setState(() {
+      _printerProfile = settings.profile;
+      _savedPrinterSettings = settings;
+      _transportType = transport;
+      _selectedEndpoint = settings.endpoint;
+      if (settings.endpoint?.transport == PrinterTransportType.network) {
+        _netHostController.text = settings.endpoint!.data['host']?.toString() ?? '';
+        _netPortController.text =
+            (settings.endpoint!.data['port'] as num?)?.toInt().toString() ??
+                '$kDefaultPrinterPort';
       }
-      // Only adopt the saved transport if it is available on this platform
-      // (e.g. a USB selection synced to an iOS device falls back gracefully).
-      final transport = _availableTransportTypes.contains(settings.transport)
-          ? settings.transport
-          : (_availableTransportTypes.isNotEmpty
-              ? _availableTransportTypes.first
-              : settings.transport);
-      setState(() {
-        _printerProfile = settings.profile;
-        _savedPrinterSettings = settings;
-        _transportType = transport;
-        _selectedEndpoint = settings.endpoint;
-        if (settings.endpoint?.transport == PrinterTransportType.network) {
-          _netHostController.text = settings.endpoint!.data['host']?.toString() ?? '';
-          _netPortController.text =
-              (settings.endpoint!.data['port'] as num?)?.toInt().toString() ??
-                  '$kDefaultPrinterPort';
-        }
-      });
-    } catch (_) {
-      // Ignore malformed local setting and keep defaults.
-    }
+    });
   }
 
   Future<void> _savePrinterSettings({bool showStatus = true}) async {
@@ -587,8 +570,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       endpoint: _currentEndpoint,
     );
 
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_printerSettingsKey, jsonEncode(settings.toJson()));
+    await PrinterSettingsStore.save(settings);
 
     if (!mounted) {
       return;

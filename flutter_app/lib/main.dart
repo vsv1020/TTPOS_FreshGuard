@@ -5,7 +5,7 @@ import 'package:hive_flutter/hive_flutter.dart';
 
 import 'notifications/reminder_notifications.dart';
 import 'screens/bind_screen.dart';
-import 'screens/dashboard_screen.dart';
+import 'screens/kiosk_screen.dart';
 import 'session.dart';
 import 'storage/secure_session_storage.dart';
 
@@ -91,7 +91,7 @@ class _FreshGuardStoreAppState extends State<FreshGuardStoreApp> {
           ? const Scaffold(body: Center(child: CircularProgressIndicator()))
           : (_session == null
                 ? BindScreen(onBound: _onBound)
-                : DashboardScreen(session: _session!, onLogout: _logout)),
+                : KioskScreen(session: _session!, onLogout: _logout)),
     );
   }
 }

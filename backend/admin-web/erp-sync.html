@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title data-i18n="title.erpSync">FreshGuard Admin · ERP Sync</title>
+    <link rel="stylesheet" href="/admin/assets/styles.css" />
+    <style>
+      .erp-result {
+        margin-top: 8px;
+        font-size: 0.9rem;
+        min-height: 1.2rem;
+        color: #334155;
+      }
+
+      .erp-result.ok { color: #15803d; }
+      .erp-result.error { color: #b91c1c; }
+
+      .erp-counts {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 14px;
+        margin: 8px 0 12px;
+      }
+
+      .erp-count {
+        background: #f1f5f9;
+        border-radius: 10px;
+        padding: 10px 14px;
+        min-width: 110px;
+      }
+
+      .erp-count .label {
+        display: block;
+        font-size: 0.78rem;
+        color: #64748b;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+      }
+
+      .erp-count .value {
+        display: block;
+        font-size: 1.5rem;
+        font-weight: 800;
+        color: #0f172a;
+      }
+
+      .erp-category-list {
+        max-height: 320px;
+        overflow-y: auto;
+        display: grid;
+        gap: 4px;
+        margin: 8px 0 0;
+      }
+
+      .erp-category-list label {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-weight: 400;
+        margin: 0;
+      }
+
+      .erp-category-list label.is-group {
+        color: #64748b;
+        font-weight: 600;
+      }
+
+      .erp-category-list input[type='checkbox'] {
+        width: auto;
+      }
+
+      .erp-sublist {
+        margin: 8px 0 0;
+        font-size: 0.88rem;
+        color: #334155;
+      }
+
+      .erp-sublist li { margin: 2px 0; }
+
+      .status-badge {
+        display: inline-block;
+        padding: 3px 10px;
+        border-radius: 999px;
+        font-size: 0.82rem;
+        font-weight: 700;
+      }
+
+      .status-badge.ok { background: #dcfce7; color: #15803d; }
+      .status-badge.error { background: #fee2e2; color: #b91c1c; }
+    </style>
+  </head>
+  <body class="dashboard-page">
+    <header class="topbar">
+      <h1 data-i18n="app.title">FreshGuard Admin</h1>
+      <nav class="topnav">
+        <a data-i18n="nav.dashboard" href="/admin/dashboard">Dashboard</a>
+        <a data-i18n="nav.binding" href="/admin/binding">Binding</a>
+        <a data-i18n="nav.products" href="/admin/products">Products</a>
+        <a data-i18n="nav.staff" href="/admin/staff">Staff</a>
+        <a data-i18n="nav.labelTemplates" href="/admin/label-templates">Label Templates</a>
+        <a data-i18n="nav.report" href="/admin/report">Report</a>
+        <a data-i18n="nav.waste" href="/admin/waste">Waste</a>
+        <a data-i18n="nav.compliance" href="/admin/compliance">Compliance</a>
+        <a data-i18n="nav.audit" href="/admin/audit-logs">Audit</a>
+        <a data-i18n="nav.erpSync" href="/admin/erp-sync">ERP</a>
+        <a data-i18n="nav.admins" href="/admin/admins" data-nav="admins" hidden>Admins</a>
+      </nav>
+      <button id="logout-btn" type="button" data-i18n="common.logout">Log Out</button>
+    </header>
+
+    <main class="dashboard-grid">
+      <!-- (1) Brand selector (platform_admin only) -->
+      <section class="panel" data-write id="erp-brand-panel" hidden>
+        <h2 data-i18n="common.brand">Brand</h2>
+        <select id="erp-brand-select"></select>
+      </section>
+
+      <!-- (2) Connection form -->
+      <section class="panel" data-write>
+        <h2 data-i18n="erp.connection">Connection</h2>
+        <form id="erp-connection-form" class="stack">
+          <label for="erp-base-url" data-i18n="erp.baseUrl">Base URL</label>
+          <input id="erp-base-url" type="url" placeholder="https://erp.example.com" />
+          <label for="erp-api-key" data-i18n="erp.apiKey">API Key</label>
+          <input id="erp-api-key" type="text" autocomplete="off" />
+          <label for="erp-api-secret" data-i18n="erp.apiSecret">API Secret</label>
+          <input id="erp-api-secret" type="password" autocomplete="new-password" />
+          <label for="erp-label-lang" data-i18n="erp.defaultLabelLanguage">Default label language</label>
+          <select id="erp-label-lang">
+            <option value="single" data-i18n="products.optSingle">single</option>
+            <option value="bilingual" data-i18n="products.optBilingual">bilingual</option>
+          </select>
+          <label for="erp-primary-lang" data-i18n="erp.defaultPrimaryLanguage">Default primary language</label>
+          <select id="erp-primary-lang">
+            <option value="zh">zh</option>
+            <option value="en">en</option>
+            <option value="th">th</option>
+          </select>
+          <label for="erp-secondary-lang" data-i18n="erp.defaultSecondaryLanguage">Default secondary language</label>
+          <select id="erp-secondary-lang">
+            <option value="">-</option>
+            <option value="zh">zh</option>
+            <option value="en">en</option>
+            <option value="th">th</option>
+          </select>
+          <div style="display:flex;gap:8px;">
+            <button type="submit" style="flex:1;" data-i18n="common.save">Save</button>
+            <button type="button" id="erp-test-btn" style="flex:1;background:#0369a1;" data-i18n="erp.testConnection">Test Connection</button>
+          </div>
+          <p class="erp-result" id="erp-test-result"></p>
+        </form>
+      </section>
+
+      <!-- (3) Category panel -->
+      <section class="panel" data-write>
+        <h2 data-i18n="erp.categories">Categories</h2>
+        <button type="button" id="erp-load-categories-btn" data-i18n="erp.loadCategories">Load categories</button>
+        <div class="erp-category-list" id="erp-category-list"></div>
+        <button type="button" id="erp-save-selection-btn" style="margin-top:10px;" data-i18n="erp.saveSelection">Save selection</button>
+      </section>
+
+      <!-- (4) Preview panel -->
+      <section class="panel wide" data-write>
+        <h2 data-i18n="erp.preview">Preview</h2>
+        <button type="button" id="erp-preview-btn" data-i18n="erp.preview">Preview</button>
+        <div class="erp-counts" id="erp-preview-counts"></div>
+        <table>
+          <thead>
+            <tr>
+              <th data-i18n="products.thSku">SKU</th>
+              <th data-i18n="products.thName">Name</th>
+              <th data-i18n="erp.categories">Categories</th>
+            </tr>
+          </thead>
+          <tbody id="erp-preview-rows"></tbody>
+        </table>
+        <ul class="erp-sublist" id="erp-preview-sublist"></ul>
+      </section>
+
+      <!-- (5) Sync now -->
+      <section class="panel" data-write>
+        <h2 data-i18n="erp.syncNow">Sync now</h2>
+        <button type="button" id="erp-sync-btn" data-i18n="erp.syncNow">Sync now</button>
+      </section>
+
+      <!-- (6) Last sync status -->
+      <section class="panel" data-write>
+        <h2 data-i18n="erp.lastSync">Last sync</h2>
+        <div class="kv-list" id="erp-status"></div>
+      </section>
+    </main>
+
+    <p id="page-message" class="page-message"></p>
+
+    <script src="/admin/assets/i18n.js"></script>
+    <script src="/admin/assets/common.js"></script>
+    <script src="/admin/assets/erp-sync.js"></script>
+  </body>
+</html>

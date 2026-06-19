@@ -19,6 +19,7 @@ const { buildAdminProductsRoutes } = require('./routes/admin-products');
 const { buildAdminReportsRoutes } = require('./routes/admin-reports');
 const { buildAdminDashboardRoutes } = require('./routes/admin-dashboard');
 const { buildAdminLabelTemplatesRoutes } = require('./routes/admin-label-templates');
+const { buildAdminErpRoutes } = require('./routes/admin-erp');
 const { buildStoreRoutes } = require('./routes/store');
 const { buildAdminPagesRoutes } = require('./routes/admin-pages');
 
@@ -80,6 +81,7 @@ function buildApp({ db, jwtSecret, adminWebDir }) {
   app.use(buildAdminReportsRoutes({ db, adminApiAuth }));
   app.use(buildAdminDashboardRoutes({ db, adminApiAuth }));
   app.use(buildAdminLabelTemplatesRoutes({ db, adminApiAuth }));
+  app.use(buildAdminErpRoutes({ db, adminApiAuth }));
   app.use(buildStoreRoutes({ db, jwtSecret, storeApiAuth, bindLimiter }));
   app.use(buildAdminPagesRoutes({ webRoot, adminWebAuth }));
 

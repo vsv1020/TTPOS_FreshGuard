@@ -100,6 +100,21 @@ const {
   recordAudit,
   listAuditLogs
 } = require('./repos/audit');
+const {
+  getConnection,
+  getConnectionWithSecret,
+  upsertConnection,
+  setSyncStatus,
+  getSelections,
+  setSelections
+} = require('./repos/erp-connections');
+const {
+  fetchItemGroups,
+  fetchItems,
+  mapItemToProduct,
+  previewSync,
+  runSync
+} = require('./services/erp-sync');
 
 module.exports = {
   HANDLING_REASONS,
@@ -124,9 +139,13 @@ module.exports = {
   deleteLabelTemplate,
   deleteProduct,
   ensureAdminUser,
+  fetchItemGroups,
+  fetchItems,
   getAdminAccountById,
   getBrandPromoRules,
   getBrandReminderConfig,
+  getConnection,
+  getConnectionWithSecret,
   getDashboardSummary,
   getDefaultLabelTemplate,
   getInspectionScoreTrend,
@@ -134,6 +153,7 @@ module.exports = {
   getLossTrend,
   getPinLockState,
   getProductById,
+  getSelections,
   getStoreBatchByBarcode,
   getStoreById,
   getStoreDashboardRanking,
@@ -156,7 +176,9 @@ module.exports = {
   listStoreProducts,
   listStoreReminders,
   listStoreStaff,
+  mapItemToProduct,
   openReminder,
+  previewSync,
   recordAudit,
   recordPinFailure,
   resetAdminAccountPassword,
@@ -164,9 +186,13 @@ module.exports = {
   renderLabelTemplate,
   renderStoreBatchLabel,
   runReminderScan,
+  runSync,
+  setSelections,
+  setSyncStatus,
   updateAdminAccount,
   updateBrandPromoRules,
   updateBrandReminderConfig,
+  upsertConnection,
   updateLabelTemplate,
   updateProduct,
   updateStoreStaff,

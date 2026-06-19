@@ -27,6 +27,8 @@ async function getProductById(db, productId) {
             p.cost_price AS costPrice,
             p.color_code AS colorCode,
             p.is_active AS isActive,
+            p.external_ref AS externalRef,
+            p.source AS source,
             p.created_at AS createdAt,
             p.updated_at AS updatedAt
      FROM products p
@@ -72,7 +74,9 @@ async function createProduct(
     storageConditions,
     openedShelfLifeHours,
     costPrice,
-    colorCode
+    colorCode,
+    externalRef,
+    source
   }
 ) {
   const normalizedBrandId = requirePositiveInteger(brandId, 'brandId');
@@ -102,6 +106,8 @@ async function createProduct(
   const normalizedOpenedShelfLifeHours = normalizeOpenedShelfLifeHours(openedShelfLifeHours);
   const normalizedCostPrice = normalizeCostPrice(costPrice);
   const normalizedColorCode = normalizeColorCode(colorCode);
+  const normalizedExternalRef = String(externalRef || '').trim() || null;
+  const normalizedSource = String(source || '').trim() || 'manual';
 
   const brand = await getBrandById(db, normalizedBrandId);
   if (!brand) {
@@ -121,8 +127,10 @@ async function createProduct(
       storage_conditions,
       opened_shelf_life_hours,
       cost_price,
-      color_code
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      color_code,
+      external_ref,
+      source
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     normalizedBrandId,
     normalizedName,
     normalizedSku,
@@ -134,7 +142,9 @@ async function createProduct(
     normalizedStorageConditions,
     normalizedOpenedShelfLifeHours,
     normalizedCostPrice,
-    normalizedColorCode
+    normalizedColorCode,
+    normalizedExternalRef,
+    normalizedSource
   );
 
   return getProductById(db, result.lastID);
@@ -151,7 +161,12 @@ const PRODUCT_UPDATE_COLUMN_MAP = {
   storageConditions: 'storage_conditions',
   openedShelfLifeHours: 'opened_shelf_life_hours',
   costPrice: 'cost_price',
-  colorCode: 'color_code'
+  colorCode: 'color_code',
+  // ERP sync only. isActive is the soft-delete / reactivate toggle and is NOT
+  // exposed via the PATCH /api/admin/products/:id route body handler.
+  isActive: 'is_active',
+  externalRef: 'external_ref',
+  source: 'source'
 };
 
 async function updateProduct(db, productId, fields = {}) {
@@ -201,6 +216,12 @@ async function updateProduct(db, productId, fields = {}) {
       value = normalizeCostPrice(rawValue);
     } else if (key === 'colorCode') {
       value = normalizeColorCode(rawValue);
+    } else if (key === 'isActive') {
+      value = rawValue ? 1 : 0;
+    } else if (key === 'externalRef') {
+      value = String(rawValue || '').trim() || null;
+    } else if (key === 'source') {
+      value = String(rawValue || '').trim() || 'manual';
     }
 
     assignments.push(`${column} = ?`);
@@ -284,6 +305,8 @@ async function listProducts(db, { brandId, includeInactive = false, q, limit, of
             p.cost_price AS costPrice,
             p.color_code AS colorCode,
             p.is_active AS isActive,
+            p.external_ref AS externalRef,
+            p.source AS source,
             p.created_at AS createdAt,
             p.updated_at AS updatedAt
      ${fromSql}

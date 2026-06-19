@@ -32,6 +32,21 @@ if (process.env.ADMIN_PASSWORD === DEFAULT_ADMIN_PASSWORD) {
   console.warn('WARNING: ADMIN_PASSWORD is using the insecure default. Change it before deploying to production.');
 }
 
+// ERP credential encryption key must be exactly 64 hex chars (32 bytes). The
+// ERP secret column cannot be encrypted/decrypted without it, so refuse to boot
+// in production with a missing or malformed key (mirrors the JWT_SECRET guard).
+const ERP_CRED_KEY_VALID = /^[0-9a-fA-F]{64}$/.test(process.env.ERP_CRED_KEY || '');
+if (!ERP_CRED_KEY_VALID) {
+  if (process.env.NODE_ENV === 'production') {
+    // eslint-disable-next-line no-console
+    console.error('FATAL: ERP_CRED_KEY must be set to exactly 64 hex characters (32 bytes) before running in production.');
+    process.exit(1);
+  } else {
+    // eslint-disable-next-line no-console
+    console.warn('WARNING: ERP_CRED_KEY is not set to 64 hex characters. ERP sync will fail until it is configured.');
+  }
+}
+
 async function start() {
   fs.mkdirSync(path.dirname(DB_FILE), { recursive: true });
   const db = await createDb(DB_FILE);

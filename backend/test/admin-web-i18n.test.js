@@ -7,7 +7,7 @@ const i18nJs = fs.readFileSync(path.join(WEB_DIR, 'assets', 'i18n.js'), 'utf8');
 
 const PAGES = [
   'dashboard', 'binding', 'products', 'staff', 'label-templates',
-  'report', 'waste', 'compliance', 'audit-logs', 'admins'
+  'report', 'waste', 'compliance', 'audit-logs', 'admins', 'erp-sync'
 ];
 
 function loadI18n() {
@@ -31,12 +31,12 @@ describe('admin-web navigation consistency', () => {
     expect(unique.size).toBe(1);
   });
 
-  test('the nav has all ten links and none hardcodes class="active"', () => {
+  test('the nav has all eleven links and none hardcodes class="active"', () => {
     const block = navBlock('dashboard');
     const keys = [
       'nav.dashboard', 'nav.binding', 'nav.products', 'nav.staff',
       'nav.labelTemplates', 'nav.report', 'nav.waste', 'nav.compliance',
-      'nav.audit', 'nav.admins'
+      'nav.audit', 'nav.erpSync', 'nav.admins'
     ];
     keys.forEach((k) => expect(block).toContain(`data-i18n="${k}"`));
     // Active state is computed at runtime by markActiveNav, never baked in.
@@ -73,7 +73,7 @@ describe('admin-web i18n dictionary', () => {
   test('every nav.* key used in the markup exists in all languages', () => {
     const block = navBlock('dashboard');
     const used = [...block.matchAll(/data-i18n="(nav\.[a-zA-Z]+)"/g)].map((m) => m[1]);
-    expect(used.length).toBe(10);
+    expect(used.length).toBe(11);
     used.forEach((key) => {
       ['zh', 'en', 'th'].forEach((lang) => {
         expect(AdminI18n.STRINGS[lang][key]).toBeTruthy();

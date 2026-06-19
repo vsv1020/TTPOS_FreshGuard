@@ -160,6 +160,36 @@ CREATE INDEX IF NOT EXISTS idx_audit_logs_created ON audit_logs(created_at);
 CREATE INDEX IF NOT EXISTS idx_audit_logs_actor_created ON audit_logs(actor_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_audit_logs_action_created ON audit_logs(action, created_at);
 CREATE INDEX IF NOT EXISTS idx_batches_store_product ON batches(store_id, product_id);
+
+CREATE TABLE IF NOT EXISTS erp_connections (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  brand_id INTEGER NOT NULL UNIQUE,
+  base_url TEXT NOT NULL,
+  api_key TEXT NOT NULL,
+  api_secret_enc TEXT NOT NULL,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  default_label_language TEXT NOT NULL DEFAULT 'single' CHECK (default_label_language IN ('single', 'bilingual')),
+  default_primary_language TEXT NOT NULL DEFAULT 'th',
+  default_secondary_language TEXT,
+  last_sync_at TEXT,
+  last_sync_status TEXT,
+  last_sync_detail TEXT,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (brand_id) REFERENCES brands(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS erp_category_selections (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  brand_id INTEGER NOT NULL,
+  item_group TEXT NOT NULL,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE (brand_id, item_group),
+  FOREIGN KEY (brand_id) REFERENCES brands(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_erp_category_selections_brand ON erp_category_selections(brand_id);
 `;
 
 async function createDb(filename) {
@@ -216,6 +246,19 @@ async function createDb(filename) {
   if (!productColNames.has('color_code')) {
     await db.exec('ALTER TABLE products ADD COLUMN color_code TEXT');
   }
+  // ERP sync: external reference (ERP item_code) + origin marker. Only rows
+  // with source='erp' are touched by the sync; manual rows are never adopted.
+  if (!productColNames.has('external_ref')) {
+    await db.exec('ALTER TABLE products ADD COLUMN external_ref TEXT');
+  }
+  if (!productColNames.has('source')) {
+    await db.exec("ALTER TABLE products ADD COLUMN source TEXT DEFAULT 'manual'");
+  }
+  // One ERP item maps to at most one product per brand. Partial index keeps the
+  // constraint off manual rows (external_ref IS NULL).
+  await db.exec(
+    'CREATE UNIQUE INDEX IF NOT EXISTS idx_products_brand_extref ON products(brand_id, external_ref) WHERE external_ref IS NOT NULL'
+  );
 
   // Idempotent migration: add barcode_data and note to batches/reminders for traceability + PAO.
   const batchColumns = await db.all('PRAGMA table_info(batches)');

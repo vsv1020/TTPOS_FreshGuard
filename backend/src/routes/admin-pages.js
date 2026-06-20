@@ -62,6 +62,10 @@ function buildAdminPagesRoutes({ webRoot, adminWebAuth }) {
     res.sendFile(path.join(webRoot, 'compliance.html'));
   });
 
+  router.get('/admin/erp-sync', adminWebAuth, (_req, res) => {
+    res.sendFile(path.join(webRoot, 'erp-sync.html'));
+  });
+
   router.get('/', (_req, res) => {
     res.redirect('/admin');
   });

@@ -255,6 +255,12 @@ async function createDb(filename) {
   if (!productColNames.has('source')) {
     await db.exec("ALTER TABLE products ADD COLUMN source TEXT DEFAULT 'manual'");
   }
+  // Independent hour-granularity shelf life (nullable). When set (> 0), label
+  // expiry is computed as printedAt + N hours instead of + shelf_life_days days.
+  // Lets short-lived/prepared goods carry an hour-precise best-before.
+  if (!productColNames.has('shelf_life_hours')) {
+    await db.exec('ALTER TABLE products ADD COLUMN shelf_life_hours INTEGER');
+  }
   // One ERP item maps to at most one product per brand. Partial index keeps the
   // constraint off manual rows (external_ref IS NULL).
   await db.exec(

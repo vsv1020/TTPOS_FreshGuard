@@ -76,9 +76,11 @@ async function fetchItems(db, brandId) {
     'disabled',
     'valuation_rate'
   ];
+  // Only active items are loaded/synced. Disabled ERP items are excluded
+  // entirely (never previewed, inserted, or updated).
   const filters = [
     ['custom_classification', 'in', classifications],
-    ['disabled', 'in', [0, 1]]
+    ['disabled', '=', 0]
   ];
 
   const items = await listAll({

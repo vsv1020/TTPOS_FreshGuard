@@ -95,6 +95,7 @@
     "products.phProductName": { zh: "产品名称", en: "Product name", th: "ชื่อสินค้า" },
     "products.phSku": { zh: "SKU", en: "SKU", th: "SKU" },
     "products.phShelfLifeDays": { zh: "保质期天数", en: "Shelf life days", th: "อายุการเก็บ (วัน)" },
+    "products.phShelfLifeHours": { zh: "保质期(小时,填了优先于天数)", en: "Shelf life hours (optional, overrides days)", th: "อายุการเก็บ (ชั่วโมง, ถ้ากรอกจะใช้แทนวัน)" },
     "products.optSingle": { zh: "单语", en: "single", th: "ภาษาเดียว" },
     "products.optBilingual": { zh: "双语", en: "bilingual", th: "สองภาษา" },
     "products.hintBilingual": { zh: "双语标签需要选择第二语言。", en: "Bilingual labels require a secondary language.", th: "ฉลากสองภาษาต้องเลือกภาษาที่สอง" },

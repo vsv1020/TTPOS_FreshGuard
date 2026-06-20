@@ -1,4 +1,4 @@
-const { requirePositiveInteger, nowIso, addDaysIso } = require('../lib/util');
+const { requirePositiveInteger, nowIso, addDaysIso, addHoursIso } = require('../lib/util');
 const {
   getProductLabelLanguages,
   colorCodeLabel,
@@ -37,7 +37,11 @@ async function createBatchWithReminders(db, { storeId, productId, quantity, prin
   const normalizedStaffId = await assertStoreStaff(db, normalizedStoreId, staffId);
 
   const printedAtIso = printedAt ? new Date(printedAt).toISOString() : nowIso();
-  const expiresAtIso = addDaysIso(printedAtIso, product.shelfLifeDays);
+  // Hour-based shelf life (when set) takes precedence over the day-based one,
+  // giving short-lived/prepared goods an hour-precise best-before.
+  const expiresAtIso = product.shelfLifeHours && product.shelfLifeHours > 0
+    ? addHoursIso(printedAtIso, product.shelfLifeHours)
+    : addDaysIso(printedAtIso, product.shelfLifeDays);
 
   await db.exec('BEGIN TRANSACTION');
   try {

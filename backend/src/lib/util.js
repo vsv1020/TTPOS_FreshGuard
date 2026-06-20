@@ -29,6 +29,12 @@ function addDaysIso(iso, days) {
   return date.toISOString();
 }
 
+function addHoursIso(iso, hours) {
+  const date = new Date(iso);
+  date.setUTCHours(date.getUTCHours() + hours);
+  return date.toISOString();
+}
+
 function requirePositiveInteger(value, fieldName) {
   const parsed = Number(value);
   if (!Number.isInteger(parsed) || parsed <= 0) {
@@ -74,6 +80,7 @@ module.exports = {
   PRODUCT_COLOR_LABELS,
   nowIso,
   addDaysIso,
+  addHoursIso,
   requirePositiveInteger,
   normalizePagination,
   likeParam,

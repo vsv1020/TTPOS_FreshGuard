@@ -76,7 +76,7 @@ function renderProducts(products) {
       <td>${esc(product.name)}</td>
       <td>${esc(product.sku || '-')}</td>
       <td>${colorSwatchHtml(product.colorCode)}</td>
-      <td>${esc(product.shelfLifeDays)}</td>
+      <td>${product.shelfLifeHours ? `${esc(product.shelfLifeHours)}h` : `${esc(product.shelfLifeDays)}d`}</td>
       <td>${esc(product.labelLanguage)}</td>
       <td>${esc(product.primaryLanguage)}</td>
       <td>${esc(product.secondaryLanguage || '-')}</td>
@@ -167,6 +167,7 @@ function openEditModal(product) {
   document.getElementById('edit-product-name').value = product.name || '';
   document.getElementById('edit-product-sku').value = product.sku || '';
   document.getElementById('edit-product-shelf-life').value = product.shelfLifeDays ?? '';
+  document.getElementById('edit-product-shelf-life-hours').value = product.shelfLifeHours ?? '';
   editLabelLanguageSelect.value = product.labelLanguage || 'single';
   editPrimaryLanguageSelect.value = product.primaryLanguage || 'en';
 
@@ -227,6 +228,9 @@ productForm.addEventListener('submit', async (event) => {
     name: document.getElementById('product-name').value.trim(),
     sku: document.getElementById('product-sku').value.trim(),
     shelfLifeDays: Number(document.getElementById('product-shelf-life').value),
+    shelfLifeHours: document.getElementById('product-shelf-life-hours').value
+      ? Number(document.getElementById('product-shelf-life-hours').value)
+      : null,
     labelLanguage: labelLanguageSelect.value,
     primaryLanguage: primaryLanguageSelect.value,
     secondaryLanguage: secondaryLanguageSelect.value,
@@ -263,6 +267,9 @@ editProductForm.addEventListener('submit', async (event) => {
     name: document.getElementById('edit-product-name').value.trim(),
     sku: document.getElementById('edit-product-sku').value.trim(),
     shelfLifeDays: Number(document.getElementById('edit-product-shelf-life').value),
+    shelfLifeHours: document.getElementById('edit-product-shelf-life-hours').value
+      ? Number(document.getElementById('edit-product-shelf-life-hours').value)
+      : null,
     labelLanguage: editLabelLanguageSelect.value,
     primaryLanguage: editPrimaryLanguageSelect.value,
     secondaryLanguage: editSecondaryLanguageSelect.value,

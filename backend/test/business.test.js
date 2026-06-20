@@ -39,6 +39,7 @@ describe('Core business flow', () => {
 
   async function setupBoundStore({
     shelfLifeDays = 2,
+    shelfLifeHours = null,
     labelLanguage = 'bilingual',
     primaryLanguage = 'en',
     secondaryLanguage = 'es'
@@ -65,6 +66,10 @@ describe('Core business flow', () => {
       labelLanguage,
       primaryLanguage
     };
+
+    if (shelfLifeHours != null) {
+      productPayload.shelfLifeHours = shelfLifeHours;
+    }
 
     if (labelLanguage === 'bilingual') {
       productPayload.secondaryLanguage = secondaryLanguage;
@@ -162,6 +167,25 @@ describe('Core business flow', () => {
     expect(printRes.body.label.text).toContain(`Batch ID: ${printRes.body.batch.id}`);
     expect(printRes.body.label.text).toContain(`Store: ${setup.storeName}`);
     expect(printRes.body.label.text).toContain('Languages: en, es');
+  });
+
+  test('shelfLifeHours (when set) drives expiry by the hour, overriding days', async () => {
+    const setup = await setupBoundStore({
+      shelfLifeDays: 5, // would be 5 days; hours must win
+      shelfLifeHours: 36,
+      labelLanguage: 'single',
+      primaryLanguage: 'en'
+    });
+
+    const printedAt = '2026-01-01T00:00:00.000Z';
+    const printRes = await request(app)
+      .post('/api/store/print')
+      .set('Authorization', `Bearer ${setup.storeToken}`)
+      .send({ productId: setup.productId, quantity: 1, printedAt });
+
+    expect(printRes.statusCode).toBe(201);
+    // 36 hours after midnight Jan 1 => Jan 2, 12:00 (NOT 5 days later).
+    expect(printRes.body.batch.expiresAt).toBe('2026-01-02T12:00:00.000Z');
   });
 
   test('supports status=expiring|expired|all with default thresholdDays=1', async () => {

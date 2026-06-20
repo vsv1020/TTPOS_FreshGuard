@@ -18,6 +18,7 @@ async function getProductById(db, productId) {
             p.name,
             p.sku,
             p.shelf_life_days AS shelfLifeDays,
+            p.shelf_life_hours AS shelfLifeHours,
             p.label_language AS labelLanguage,
             p.primary_language AS primaryLanguage,
             p.secondary_language AS secondaryLanguage,
@@ -49,6 +50,19 @@ function normalizeOpenedShelfLifeHours(value) {
   return parsed;
 }
 
+// Independent hour-based shelf life (nullable). When set, it overrides the
+// day-based shelf life for label expiry. Empty/blank => null (use days).
+function normalizeShelfLifeHours(value) {
+  if (value == null || value === '') {
+    return null;
+  }
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error('shelfLifeHours must be a positive integer');
+  }
+  return parsed;
+}
+
 function normalizeCostPrice(value) {
   if (value == null || value === '') {
     return null;
@@ -67,6 +81,7 @@ async function createProduct(
     name,
     sku,
     shelfLifeDays,
+    shelfLifeHours,
     labelLanguage,
     primaryLanguage,
     secondaryLanguage,
@@ -103,6 +118,7 @@ async function createProduct(
 
   const normalizedAllergens = String(allergens || '').trim() || null;
   const normalizedStorageConditions = String(storageConditions || '').trim() || null;
+  const normalizedShelfLifeHours = normalizeShelfLifeHours(shelfLifeHours);
   const normalizedOpenedShelfLifeHours = normalizeOpenedShelfLifeHours(openedShelfLifeHours);
   const normalizedCostPrice = normalizeCostPrice(costPrice);
   const normalizedColorCode = normalizeColorCode(colorCode);
@@ -120,6 +136,7 @@ async function createProduct(
       name,
       sku,
       shelf_life_days,
+      shelf_life_hours,
       label_language,
       primary_language,
       secondary_language,
@@ -130,11 +147,12 @@ async function createProduct(
       color_code,
       external_ref,
       source
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     normalizedBrandId,
     normalizedName,
     normalizedSku,
     normalizedShelfLifeDays,
+    normalizedShelfLifeHours,
     normalizedLabelLanguage,
     normalizedPrimaryLanguage,
     normalizedSecondaryLanguage,
@@ -154,6 +172,7 @@ const PRODUCT_UPDATE_COLUMN_MAP = {
   name: 'name',
   sku: 'sku',
   shelfLifeDays: 'shelf_life_days',
+  shelfLifeHours: 'shelf_life_hours',
   labelLanguage: 'label_language',
   primaryLanguage: 'primary_language',
   secondaryLanguage: 'secondary_language',
@@ -200,6 +219,8 @@ async function updateProduct(db, productId, fields = {}) {
         throw new Error('shelfLifeDays must be a positive integer');
       }
       value = parsed;
+    } else if (key === 'shelfLifeHours') {
+      value = normalizeShelfLifeHours(rawValue);
     } else if (key === 'labelLanguage') {
       value = normalizeLabelLanguage(rawValue);
     } else if (key === 'primaryLanguage') {
@@ -296,6 +317,7 @@ async function listProducts(db, { brandId, includeInactive = false, q, limit, of
             p.name,
             p.sku,
             p.shelf_life_days AS shelfLifeDays,
+            p.shelf_life_hours AS shelfLifeHours,
             p.label_language AS labelLanguage,
             p.primary_language AS primaryLanguage,
             p.secondary_language AS secondaryLanguage,

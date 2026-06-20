@@ -44,34 +44,37 @@ function setTestResult(message, kind) {
 }
 
 async function loadConfig() {
-  const cfg = await requestJson(base());
+  const res = await requestJson(base());
+  const cfg = res && res.connection;
   if (!cfg) {
     return;
   }
-  baseUrlInput.value = cfg.base_url || '';
-  apiKeyInput.value = cfg.api_key || '';
+  baseUrlInput.value = cfg.baseUrl || '';
+  apiKeyInput.value = cfg.apiKey || '';
   apiSecretInput.value = '';
   apiSecretInput.placeholder = cfg.has_secret ? t('erp.configured') : '';
-  if (cfg.default_label_language) {
-    labelLangSelect.value = cfg.default_label_language;
+  if (cfg.defaultLabelLanguage) {
+    labelLangSelect.value = cfg.defaultLabelLanguage;
   }
-  if (cfg.default_primary_language) {
-    primaryLangSelect.value = cfg.default_primary_language;
+  if (cfg.defaultPrimaryLanguage) {
+    primaryLangSelect.value = cfg.defaultPrimaryLanguage;
   }
-  secondaryLangSelect.value = cfg.default_secondary_language || '';
+  secondaryLangSelect.value = cfg.defaultSecondaryLanguage || '';
 }
 
 async function loadStatus() {
-  const status = await requestJson(`${base()}/status`);
+  const res = await requestJson(`${base()}/status`);
+  const status = res && res.status;
   if (!status) {
     return;
   }
-  const badgeClass = status.last_sync_status === 'ok' ? 'ok' : 'error';
-  const badgeText = status.last_sync_status === 'ok' ? t('erp.statusOk') : t('erp.statusError');
+  const isOk = status.lastSyncStatus === 'success' || status.lastSyncStatus === 'ok';
+  const badgeClass = isOk ? 'ok' : 'error';
+  const badgeText = isOk ? t('erp.statusOk') : t('erp.statusError');
   statusBox.innerHTML = `
-    <div><strong>${esc(t('erp.lastSync'))}:</strong> ${esc(status.last_sync_at || '-')}</div>
-    <div>${status.last_sync_status ? `<span class="status-badge ${badgeClass}">${esc(badgeText)}</span>` : '-'}</div>
-    <div>${esc(status.last_sync_detail || '')}</div>
+    <div><strong>${esc(t('erp.lastSync'))}:</strong> ${esc(status.lastSyncAt || '-')}</div>
+    <div>${status.lastSyncStatus ? `<span class="status-badge ${badgeClass}">${esc(badgeText)}</span>` : '-'}</div>
+    <div>${esc(status.lastSyncDetail || '')}</div>
   `;
 }
 
@@ -94,8 +97,8 @@ async function loadCategorySelection() {
   if (!res) {
     return;
   }
-  const { items } = unwrapList(res, 'itemGroups');
-  selectedCategories = new Set(items.map((g) => g.name));
+  const selections = Array.isArray(res.selections) ? res.selections : [];
+  selectedCategories = new Set(selections.filter((s) => s.enabled).map((s) => s.itemGroup));
 }
 
 async function loadAndRenderCategories() {
@@ -124,9 +127,9 @@ function renderPreview(result) {
   previewRows.innerHTML = rows
     .map(
       (row) => `<tr>
-        <td>${esc(row.sku)}</td>
+        <td>${esc(row.externalRef)}</td>
         <td>${esc(row.name)}</td>
-        <td>${esc(Array.isArray(row.categories) ? row.categories.join(', ') : row.categories)}</td>
+        <td>${esc(row.action)}</td>
       </tr>`
     )
     .join('');
@@ -149,14 +152,14 @@ connectionForm.addEventListener('submit', async (event) => {
   event.preventDefault();
   setPageMessage('');
   const payload = {
-    base_url: baseUrlInput.value.trim(),
-    api_key: apiKeyInput.value.trim(),
-    default_label_language: labelLangSelect.value,
-    default_primary_language: primaryLangSelect.value,
-    default_secondary_language: secondaryLangSelect.value || null
+    baseUrl: baseUrlInput.value.trim(),
+    apiKey: apiKeyInput.value.trim(),
+    defaultLabelLanguage: labelLangSelect.value,
+    defaultPrimaryLanguage: primaryLangSelect.value,
+    defaultSecondaryLanguage: secondaryLangSelect.value || null
   };
   if (apiSecretInput.value) {
-    payload.api_secret = apiSecretInput.value;
+    payload.apiSecret = apiSecretInput.value;
   }
   try {
     await requestJson(base(), { method: 'PUT', body: JSON.stringify(payload) });
@@ -197,9 +200,9 @@ saveSelectionBtn.addEventListener('click', async () => {
 previewBtn.addEventListener('click', async () => {
   setPageMessage('');
   try {
-    const result = await requestJson(`${base()}/preview`, { method: 'POST' });
-    if (result) {
-      renderPreview(result);
+    const res = await requestJson(`${base()}/preview`, { method: 'POST' });
+    if (res && res.preview) {
+      renderPreview(res.preview);
     }
   } catch (error) {
     setPageMessage(error.message, true);
@@ -226,9 +229,10 @@ syncBtn.addEventListener('click', async () => {
     if (!res.ok) {
       throw new Error(body.error || `Request failed (${res.status})`);
     }
-    const errors = Array.isArray(body.errors) ? body.errors : [];
+    const result = body.result || {};
+    const errors = Array.isArray(result.errors) ? result.errors : [];
     setPageMessage(
-      `${t('erp.willInsert')}: ${body.inserted || 0}, ${t('erp.willUpdate')}: ${body.updated || 0}, ${t('erp.willDeactivate')}: ${body.deactivated || 0}, ${errors.length} error(s).`,
+      `${t('erp.willInsert')}: ${result.inserted || 0}, ${t('erp.willUpdate')}: ${result.updated || 0}, ${t('erp.willDeactivate')}: ${result.deactivated || 0}, ${errors.length} error(s).`,
       errors.length > 0
     );
     await loadStatus();

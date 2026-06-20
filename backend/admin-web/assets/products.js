@@ -21,7 +21,7 @@ const editCancelBtn = document.getElementById('edit-cancel-btn');
 let brands = [];
 let stores = [];
 let currentProducts = [];
-const LANGUAGE_OPTIONS = ['en', 'es', 'fr', 'zh'];
+const LANGUAGE_OPTIONS = ['th', 'zh', 'en', 'es', 'fr'];
 
 const productListControls = window.AdminCommon.createListControls({
   container: 'products-controls',
@@ -76,7 +76,7 @@ function renderProducts(products) {
       <td>${esc(product.name)}</td>
       <td>${esc(product.sku || '-')}</td>
       <td>${colorSwatchHtml(product.colorCode)}</td>
-      <td>${product.shelfLifeHours ? `${esc(product.shelfLifeHours)}h` : `${esc(product.shelfLifeDays)}d`}</td>
+      <td>${esc(product.shelfLifeHours ?? (product.shelfLifeDays != null ? product.shelfLifeDays * 24 : ''))}h</td>
       <td>${esc(product.labelLanguage)}</td>
       <td>${esc(product.primaryLanguage)}</td>
       <td>${esc(product.secondaryLanguage || '-')}</td>
@@ -102,7 +102,7 @@ function renderLanguageSelects() {
   editPrimaryLanguageSelect.innerHTML = options;
   editSecondaryLanguageSelect.innerHTML = noneOption + options;
 
-  primaryLanguageSelect.value = 'en';
+  primaryLanguageSelect.value = 'th';
 }
 
 function syncSecondaryLanguageRequired() {
@@ -166,8 +166,8 @@ function openEditModal(product) {
   editBrandSelect.value = String(product.brandId);
   document.getElementById('edit-product-name').value = product.name || '';
   document.getElementById('edit-product-sku').value = product.sku || '';
-  document.getElementById('edit-product-shelf-life').value = product.shelfLifeDays ?? '';
-  document.getElementById('edit-product-shelf-life-hours').value = product.shelfLifeHours ?? '';
+  document.getElementById('edit-product-shelf-life-hours').value =
+    product.shelfLifeHours ?? (product.shelfLifeDays != null ? product.shelfLifeDays * 24 : '');
   editLabelLanguageSelect.value = product.labelLanguage || 'single';
   editPrimaryLanguageSelect.value = product.primaryLanguage || 'en';
 
@@ -227,10 +227,9 @@ productForm.addEventListener('submit', async (event) => {
     brandId: Number(brandSelect.value),
     name: document.getElementById('product-name').value.trim(),
     sku: document.getElementById('product-sku').value.trim(),
-    shelfLifeDays: Number(document.getElementById('product-shelf-life').value),
-    shelfLifeHours: document.getElementById('product-shelf-life-hours').value
-      ? Number(document.getElementById('product-shelf-life-hours').value)
-      : null,
+    shelfLifeHours: Number(document.getElementById('product-shelf-life-hours').value),
+    // Day-based shelf life is kept internally for back-compat; derived from hours.
+    shelfLifeDays: Math.max(1, Math.ceil(Number(document.getElementById('product-shelf-life-hours').value) / 24)),
     labelLanguage: labelLanguageSelect.value,
     primaryLanguage: primaryLanguageSelect.value,
     secondaryLanguage: secondaryLanguageSelect.value,
@@ -247,7 +246,7 @@ productForm.addEventListener('submit', async (event) => {
       body: JSON.stringify(payload)
     });
     productForm.reset();
-    primaryLanguageSelect.value = 'en';
+    primaryLanguageSelect.value = 'th';
     secondaryLanguageSelect.value = '';
     syncSecondaryLanguageRequired();
     await loadProducts();
@@ -266,10 +265,8 @@ editProductForm.addEventListener('submit', async (event) => {
     brandId: Number(editBrandSelect.value),
     name: document.getElementById('edit-product-name').value.trim(),
     sku: document.getElementById('edit-product-sku').value.trim(),
-    shelfLifeDays: Number(document.getElementById('edit-product-shelf-life').value),
-    shelfLifeHours: document.getElementById('edit-product-shelf-life-hours').value
-      ? Number(document.getElementById('edit-product-shelf-life-hours').value)
-      : null,
+    shelfLifeHours: Number(document.getElementById('edit-product-shelf-life-hours').value),
+    shelfLifeDays: Math.max(1, Math.ceil(Number(document.getElementById('edit-product-shelf-life-hours').value) / 24)),
     labelLanguage: editLabelLanguageSelect.value,
     primaryLanguage: editPrimaryLanguageSelect.value,
     secondaryLanguage: editSecondaryLanguageSelect.value,

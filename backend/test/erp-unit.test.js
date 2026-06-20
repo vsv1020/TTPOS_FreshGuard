@@ -49,15 +49,22 @@ describe('mapItemToProduct', () => {
       .toThrow(/item_code is required/);
   });
 
-  test('null / 0 / negative shelf_life throws', () => {
+  test('null / 0 / negative shelf_life throws when no brand default is configured', () => {
+    // ERP has no usable shelf life and the connection carries no default.
     expect(() => mapItemToProduct({ item_code: 'A', shelf_life_in_days: null }, CONNECTION))
-      .toThrow(/shelf_life_in_days/);
+      .toThrow(/shelf life/);
     expect(() => mapItemToProduct({ item_code: 'A', shelf_life_in_days: 0 }, CONNECTION))
-      .toThrow(/shelf_life_in_days/);
+      .toThrow(/shelf life/);
     expect(() => mapItemToProduct({ item_code: 'A', shelf_life_in_days: -3 }, CONNECTION))
-      .toThrow(/shelf_life_in_days/);
-    expect(() => mapItemToProduct({ item_code: 'A', shelf_life_in_days: '' }, CONNECTION))
-      .toThrow(/shelf_life_in_days/);
+      .toThrow(/shelf life/);
+  });
+
+  test('missing/0 shelf_life falls back to the brand default (insert-only)', () => {
+    const withDefault = { ...CONNECTION, defaultShelfLifeDays: 3 };
+    expect(mapItemToProduct({ item_code: 'A', shelf_life_in_days: 0 }, withDefault).shelfLifeDays).toBe(3);
+    expect(mapItemToProduct({ item_code: 'A', shelf_life_in_days: null }, withDefault).shelfLifeDays).toBe(3);
+    // A real ERP value still wins over the default.
+    expect(mapItemToProduct({ item_code: 'A', shelf_life_in_days: 7 }, withDefault).shelfLifeDays).toBe(7);
   });
 
   test('valid item maps externalRef, sku, name, shelfLife, languages, disabled', () => {

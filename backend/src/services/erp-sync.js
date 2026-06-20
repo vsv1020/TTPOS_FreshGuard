@@ -29,17 +29,31 @@ async function requireEnabledConnection(db, brandId) {
   return connection;
 }
 
-// Proxied Item Group list (name, parent, is_group). Direct call per request
-// (no cache) with the client's 10s timeout + typed errors.
+// Selectable categories = DISTINCT values of the custom field
+// `custom_classification` across active Items. (item_group is uniformly
+// "Raw Material" in this ERP and carries no category signal.) Returns
+// [{ name }] so the picker renders each as a selectable leaf.
 async function fetchItemGroups(db, brandId) {
   const connection = await requireEnabledConnection(db, brandId);
-  return listAll({
+  const rows = await listAll({
     baseUrl: connection.baseUrl,
     apiKey: connection.apiKey,
     apiSecret: connection.apiSecret,
-    resourcePath: 'api/resource/Item Group',
-    fields: ['name', 'parent_item_group', 'is_group']
+    resourcePath: 'api/resource/Item',
+    fields: ['custom_classification'],
+    filters: [['disabled', '=', 0]]
   });
+  const seen = new Set();
+  const out = [];
+  for (const row of rows) {
+    const value = String(row.custom_classification || '').trim();
+    if (value && !seen.has(value)) {
+      seen.add(value);
+      out.push({ name: value });
+    }
+  }
+  out.sort((a, b) => a.name.localeCompare(b.name));
+  return out;
 }
 
 // Items in the brand's selected groups. Fetches BOTH disabled=0 and disabled=1
@@ -49,21 +63,21 @@ async function fetchItemGroups(db, brandId) {
 async function fetchItems(db, brandId) {
   const connection = await requireEnabledConnection(db, brandId);
   const selections = await getSelections(db, brandId);
-  const groups = selections.filter((s) => s.enabled).map((s) => s.itemGroup);
-  if (groups.length === 0) {
+  const classifications = selections.filter((s) => s.enabled).map((s) => s.itemGroup);
+  if (classifications.length === 0) {
     return { connection, items: [] };
   }
 
   const fields = [
     'item_code',
     'item_name',
-    'item_group',
+    'custom_classification',
     'shelf_life_in_days',
     'disabled',
     'valuation_rate'
   ];
   const filters = [
-    ['item_group', 'in', groups],
+    ['custom_classification', 'in', classifications],
     ['disabled', 'in', [0, 1]]
   ];
 
@@ -91,10 +105,16 @@ function mapItemToProduct(item, connection) {
     throw new Error('item_code is required');
   }
 
+  // ERP has no usable shelf life (shelf_life_in_days is 0 here), so fall back to
+  // the brand-level default. Applied on INSERT only (see runSync) — the admin's
+  // per-product shelf life set in FreshGuard is never overwritten by a re-sync.
   const shelfLifeRaw = item.shelf_life_in_days;
-  const shelfLifeDays = Number(shelfLifeRaw);
+  let shelfLifeDays = Number(shelfLifeRaw);
   if (shelfLifeRaw == null || shelfLifeRaw === '' || !Number.isFinite(shelfLifeDays) || shelfLifeDays <= 0) {
-    throw new Error(`shelf_life_in_days must be a positive integer (item ${externalRef})`);
+    shelfLifeDays = Number(connection.defaultShelfLifeDays);
+  }
+  if (!Number.isFinite(shelfLifeDays) || shelfLifeDays <= 0) {
+    throw new Error(`no shelf life for item ${externalRef} and no brand default configured`);
   }
 
   const name = String(item.item_name || item.item_code || '').trim();
@@ -295,13 +315,13 @@ async function runSync(db, brandId, actor = {}) {
             }
             continue;
           }
-          // Sparse update patch. costPrice is OMITTED (insert-only). sku is
-          // seeded on insert only, so it is omitted here too. allergens /
-          // storageConditions / openedShelfLifeHours / colorCode are omitted to
-          // preserve manual edits.
+          // Sparse update patch. costPrice and shelfLifeDays are OMITTED
+          // (insert-only: ERP has no real shelf life, so a re-sync must never
+          // clobber the admin's per-product value). sku is seeded on insert
+          // only. allergens / storageConditions / openedShelfLifeHours /
+          // colorCode are omitted to preserve manual edits.
           const patch = {
             name: mapped.name,
-            shelfLifeDays: mapped.shelfLifeDays,
             labelLanguage: mapped.labelLanguage,
             primaryLanguage: mapped.primaryLanguage,
             secondaryLanguage: mapped.secondaryLanguage

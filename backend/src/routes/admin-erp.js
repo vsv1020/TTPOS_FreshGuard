@@ -50,7 +50,8 @@ function buildAdminErpRoutes({ db, adminApiAuth }) {
         enabled: req.body?.enabled,
         defaultLabelLanguage: req.body?.defaultLabelLanguage,
         defaultPrimaryLanguage: req.body?.defaultPrimaryLanguage,
-        defaultSecondaryLanguage: req.body?.defaultSecondaryLanguage
+        defaultSecondaryLanguage: req.body?.defaultSecondaryLanguage,
+        defaultShelfLifeDays: req.body?.defaultShelfLifeDays
       });
       recordAudit(db, {
         actorType: 'admin',

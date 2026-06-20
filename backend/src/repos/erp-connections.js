@@ -19,6 +19,7 @@ function publicConnection(row) {
     defaultLabelLanguage: row.default_label_language,
     defaultPrimaryLanguage: row.default_primary_language,
     defaultSecondaryLanguage: row.default_secondary_language,
+    defaultShelfLifeDays: row.default_shelf_life_days,
     lastSyncAt: row.last_sync_at,
     lastSyncStatus: row.last_sync_status,
     lastSyncDetail: row.last_sync_detail,
@@ -106,13 +107,19 @@ async function upsertConnection(db, brandId, fields = {}) {
     throw new Error('defaultSecondaryLanguage is required for bilingual labels');
   }
 
+  const rawShelfLife = fields.defaultShelfLifeDays == null
+    ? (existing ? existing.default_shelf_life_days : 1)
+    : fields.defaultShelfLifeDays;
+  const parsedShelfLife = parseInt(rawShelfLife, 10);
+  const defaultShelfLifeDays = Number.isFinite(parsedShelfLife) && parsedShelfLife > 0 ? parsedShelfLife : 1;
+
   const now = nowIso();
   if (existing) {
     await db.run(
       `UPDATE erp_connections
        SET base_url = ?, api_key = ?, api_secret_enc = ?, enabled = ?,
            default_label_language = ?, default_primary_language = ?, default_secondary_language = ?,
-           updated_at = ?
+           default_shelf_life_days = ?, updated_at = ?
        WHERE brand_id = ?`,
       baseUrl,
       apiKey,
@@ -121,6 +128,7 @@ async function upsertConnection(db, brandId, fields = {}) {
       defaultLabelLanguage,
       defaultPrimaryLanguage,
       defaultSecondaryLanguage,
+      defaultShelfLifeDays,
       now,
       normalizedBrandId
     );
@@ -129,8 +137,8 @@ async function upsertConnection(db, brandId, fields = {}) {
       `INSERT INTO erp_connections (
         brand_id, base_url, api_key, api_secret_enc, enabled,
         default_label_language, default_primary_language, default_secondary_language,
-        created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        default_shelf_life_days, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       normalizedBrandId,
       baseUrl,
       apiKey,
@@ -139,6 +147,7 @@ async function upsertConnection(db, brandId, fields = {}) {
       defaultLabelLanguage,
       defaultPrimaryLanguage,
       defaultSecondaryLanguage,
+      defaultShelfLifeDays,
       now,
       now
     );

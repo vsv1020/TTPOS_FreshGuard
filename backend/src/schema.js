@@ -171,6 +171,7 @@ CREATE TABLE IF NOT EXISTS erp_connections (
   default_label_language TEXT NOT NULL DEFAULT 'single' CHECK (default_label_language IN ('single', 'bilingual')),
   default_primary_language TEXT NOT NULL DEFAULT 'th',
   default_secondary_language TEXT,
+  default_shelf_life_days INTEGER NOT NULL DEFAULT 1,
   last_sync_at TEXT,
   last_sync_status TEXT,
   last_sync_detail TEXT,
@@ -259,6 +260,12 @@ async function createDb(filename) {
   await db.exec(
     'CREATE UNIQUE INDEX IF NOT EXISTS idx_products_brand_extref ON products(brand_id, external_ref) WHERE external_ref IS NOT NULL'
   );
+  // ERP sync: brand-level default shelf life, used when the ERP Item has no
+  // shelf_life_in_days (this ERP stores 0). Applied on insert only.
+  const erpConnColumns = await db.all('PRAGMA table_info(erp_connections)');
+  if (!erpConnColumns.some((col) => col.name === 'default_shelf_life_days')) {
+    await db.exec('ALTER TABLE erp_connections ADD COLUMN default_shelf_life_days INTEGER NOT NULL DEFAULT 1');
+  }
 
   // Idempotent migration: add barcode_data and note to batches/reminders for traceability + PAO.
   const batchColumns = await db.all('PRAGMA table_info(batches)');

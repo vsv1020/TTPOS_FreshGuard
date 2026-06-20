@@ -11,6 +11,7 @@ const apiSecretInput = document.getElementById('erp-api-secret');
 const labelLangSelect = document.getElementById('erp-label-lang');
 const primaryLangSelect = document.getElementById('erp-primary-lang');
 const secondaryLangSelect = document.getElementById('erp-secondary-lang');
+const defaultShelfLifeInput = document.getElementById('erp-default-shelf-life');
 const testBtn = document.getElementById('erp-test-btn');
 const testResult = document.getElementById('erp-test-result');
 
@@ -60,6 +61,9 @@ async function loadConfig() {
     primaryLangSelect.value = cfg.defaultPrimaryLanguage;
   }
   secondaryLangSelect.value = cfg.defaultSecondaryLanguage || '';
+  if (cfg.defaultShelfLifeDays != null) {
+    defaultShelfLifeInput.value = cfg.defaultShelfLifeDays;
+  }
 }
 
 async function loadStatus() {
@@ -156,7 +160,8 @@ connectionForm.addEventListener('submit', async (event) => {
     apiKey: apiKeyInput.value.trim(),
     defaultLabelLanguage: labelLangSelect.value,
     defaultPrimaryLanguage: primaryLangSelect.value,
-    defaultSecondaryLanguage: secondaryLangSelect.value || null
+    defaultSecondaryLanguage: secondaryLangSelect.value || null,
+    defaultShelfLifeDays: parseInt(defaultShelfLifeInput.value, 10) || 1
   };
   if (apiSecretInput.value) {
     payload.apiSecret = apiSecretInput.value;

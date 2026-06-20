@@ -303,6 +303,7 @@
     "erp.defaultLabelLanguage": { zh: "默认标签语言", en: "Default label language", th: "ภาษาฉลากเริ่มต้น" },
     "erp.defaultPrimaryLanguage": { zh: "默认主语言", en: "Default primary language", th: "ภาษาหลักเริ่มต้น" },
     "erp.defaultSecondaryLanguage": { zh: "默认第二语言", en: "Default secondary language", th: "ภาษารองเริ่มต้น" },
+    "erp.defaultShelfLifeDays": { zh: "默认保质期(天)", en: "Default shelf life (days)", th: "อายุการเก็บเริ่มต้น (วัน)" },
     "erp.syncRunning": { zh: "同步正在进行中", en: "A sync is already running", th: "กำลังซิงค์อยู่แล้ว" }
   };
 
